@@ -92,13 +92,18 @@ export const API_RETRY_COUNT = 3;
 export const ORDERS_POLL_INTERVAL_MS = 10_000;
 
 /**
- * Интервал REST-батча с историей геоточек. Живые координаты идут
- * отдельно через Socket.IO по мере поступления от GPS. Этот батч —
- * только для сохранения истории в driver_location_history.
- * Поэтому значения большие: батч раз в 30 сек оптимален для БД.
+ * Интервал REST-батча с геоточками.
+ * Выполняет две роли:
+ *   1) fallback когда Socket.IO не подключён (тогда это основной
+ *      источник обновления карты диспетчера — должно быть часто)
+ *   2) сохранение истории в driver_location_history
+ *
+ * На APK с рабочим Socket.IO живые координаты идут мгновенно через
+ * socket, этот батч только дополняет историю. Для APK без socket
+ * (или при разрывах) — это главный канал, поэтому держим частым.
  */
-export const LOCATION_SEND_INTERVAL_ONLINE_MS = 30_000;
-export const LOCATION_SEND_INTERVAL_ON_ORDER_MS = 30_000;
+export const LOCATION_SEND_INTERVAL_ONLINE_MS = 10_000;
+export const LOCATION_SEND_INTERVAL_ON_ORDER_MS = 5_000;
 
 /** Максимум точек в одном батче */
 export const LOCATION_BATCH_MAX = 50;
