@@ -49,6 +49,8 @@ export function useDriverStatus() {
   /** Переключение: offline → online, online/busy → offline */
   const toggleOnline = () => {
     if (mutation.isPending) return;
+    // В активном заказе менять статус нельзя — сервер возвращает 400
+    if (status === 'on_order') return;
     const next = status === 'offline' ? 'online' : 'offline';
     mutation.mutate(next);
   };
@@ -56,6 +58,7 @@ export function useDriverStatus() {
   /** Переключение: online ↔ busy, offline → online */
   const toggleBusy = () => {
     if (mutation.isPending) return;
+    if (status === 'on_order') return;
     if (status === 'offline') {
       mutation.mutate('online');
       return;

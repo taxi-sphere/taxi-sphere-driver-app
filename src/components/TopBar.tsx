@@ -49,16 +49,20 @@ export function TopBar({ onMenuPress }: TopBarProps) {
           <TouchableOpacity
             style={[
               styles.statusBtn,
-              status === 'busy' ? styles.statusBtnBusy
+              status === 'on_order' ? styles.statusBtnOnOrder
+                : status === 'busy' ? styles.statusBtnBusy
                 : status === 'online' ? styles.statusBtnOnline
                 : styles.statusBtnOffline,
             ]}
             onPress={toggleBusy}
-            disabled={isUpdating}
+            // Пока водитель в заказе — переключать статус нельзя:
+            // сервер возвращает 400. Кнопка остаётся информационной.
+            disabled={isUpdating || status === 'on_order'}
             activeOpacity={0.7}
           >
             <Text style={styles.statusBtnLabel}>
               {isUpdating ? '...'
+                : status === 'on_order' ? 'В ЗАКАЗЕ'
                 : status === 'busy' ? 'ЗАНЯТ'
                 : status === 'online' ? 'ГОТОВ'
                 : 'НА ЛИНИЮ'}
@@ -156,6 +160,9 @@ const styles = StyleSheet.create({
   },
   statusBtnOffline: {
     backgroundColor: '#6b7280',
+  },
+  statusBtnOnOrder: {
+    backgroundColor: '#4f46e5',
   },
   statusBtnLabel: {
     fontSize: 14,
