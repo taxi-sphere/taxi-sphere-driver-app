@@ -37,5 +37,7 @@ export async function fetchBalanceTransactions(
 
   const qs = search.toString();
   const path = `driver/balance-transactions${qs ? `?${qs}` : ''}`;
-  return apiGet<BalanceTransactionsResponse>(path);
+  // Сервер возвращает { success, data: {...} } — разворачиваем .data
+  const res = await apiGet<{ success: boolean; data: BalanceTransactionsResponse }>(path);
+  return res.data;
 }
