@@ -84,7 +84,8 @@ export const currentOrderSchema = z.object({
   startedAt: z.string().nullable(),
   serviceName: z.string().nullable(),
   tariffName: z.string().nullable(),
-  stops: z.array(orderStopSchema),
+  // default([]) — защита от отсутствия поля в ответе сервера
+  stops: z.array(orderStopSchema).default([]),
 });
 
 export const currentOrderResponseSchema = z.object({

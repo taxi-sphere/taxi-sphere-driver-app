@@ -12,6 +12,7 @@ import {
   availableOrdersResponseSchema,
   currentOrderResponseSchema,
 } from '@/schemas/order.schema';
+import { driverLogger } from '@/services/logger.service';
 import type {
   AvailableOrder,
   AvailableOrdersMeta,
@@ -30,14 +31,35 @@ export async function getAvailableOrders(params?: {
   if (params?.limit) searchParams.limit = String(params.limit);
 
   const res = await apiGet('driver/orders/available', { searchParams });
-  return availableOrdersResponseSchema.parse(res);
+  const parsed = availableOrdersResponseSchema.safeParse(res);
+  if (!parsed.success) {
+    driverLogger.error('Schema validation failed: available orders', {
+      stack: String(parsed.error?.message ?? parsed.error),
+      screen: 'orders.api',
+      action: 'parse_available_orders',
+      extra: { issues: parsed.error?.issues },
+    });
+    // Возвращаем пустой список, не роняя приложение
+    return { items: [] };
+  }
+  return parsed.data;
 }
 
 /** Получить текущий активный заказ */
 export async function getCurrentOrder(): Promise<CurrentOrder | null> {
   const res = await apiGet('driver/orders/current');
-  const parsed = currentOrderResponseSchema.parse(res);
-  return parsed.order;
+  const parsed = currentOrderResponseSchema.safeParse(res);
+  if (!parsed.success) {
+    driverLogger.error('Schema validation failed: current order', {
+      stack: String(parsed.error?.message ?? parsed.error),
+      screen: 'orders.api',
+      action: 'parse_current_order',
+      extra: { issues: parsed.error?.issues },
+    });
+    // Не роняем экран, возвращаем null (будет показан «нет заказа»)
+    return null;
+  }
+  return parsed.data.order;
 }
 
 /** Принять заказ */

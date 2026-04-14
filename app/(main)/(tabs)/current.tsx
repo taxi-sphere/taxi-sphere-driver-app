@@ -247,7 +247,7 @@ export default function CurrentOrderScreen() {
           </View>
 
           {/* Промежуточные остановки */}
-          {order.stops.map((stop, idx) => (
+          {(order.stops ?? []).map((stop, idx) => (
             <View key={idx} style={styles.addressRow}>
               <View style={[styles.dot, styles.dotYellow]} />
               <View style={styles.addressContent}>
