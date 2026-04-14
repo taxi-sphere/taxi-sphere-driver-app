@@ -8,7 +8,7 @@
  * @updated: 2026-03-18 06:00:00
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import {
   Dimensions,
   Pressable,
   BackHandler,
+  PanResponder,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
@@ -42,6 +43,52 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
     queryFn: getProfile,
     staleTime: 5 * 60_000,
   });
+
+  // Жест закрытия свайпом влево. Подхватываем горизонтальный swipe
+  // (dx < 0) минимум на 50px ИЛИ с быстрой скоростью — и закрываем.
+  // Пока жест идёт, drawer интерактивно следует за пальцем для
+  // естественного ощущения (но не правее своей начальной позиции).
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_evt, gesture) => {
+          // Реагируем только на выраженные горизонтальные жесты влево
+          return gesture.dx < -8 && Math.abs(gesture.dx) > Math.abs(gesture.dy);
+        },
+        onPanResponderMove: (_evt, gesture) => {
+          if (gesture.dx < 0) {
+            slideAnim.setValue(Math.max(gesture.dx, -DRAWER_WIDTH));
+            // затеняем оверлей пропорционально
+            overlayAnim.setValue(
+              Math.max(0, 1 + gesture.dx / DRAWER_WIDTH),
+            );
+          }
+        },
+        onPanResponderRelease: (_evt, gesture) => {
+          // Закрываем если свайп > 50px или скорость > 0.3
+          const shouldClose =
+            gesture.dx < -50 || gesture.vx < -0.3;
+          if (shouldClose) {
+            onClose();
+          } else {
+            // Возврат в открытое состояние
+            Animated.parallel([
+              Animated.timing(slideAnim, {
+                toValue: 0,
+                duration: 150,
+                useNativeDriver: true,
+              }),
+              Animated.timing(overlayAnim, {
+                toValue: 1,
+                duration: 150,
+                useNativeDriver: true,
+              }),
+            ]).start();
+          }
+        },
+      }),
+    [onClose, slideAnim, overlayAnim],
+  );
 
   useEffect(() => {
     if (visible) {
@@ -96,8 +143,9 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
       </Animated.View>
 
-      {/* Drawer */}
+      {/* Drawer — поддерживает свайп влево для закрытия */}
       <Animated.View
+        {...panResponder.panHandlers}
         style={[styles.drawer, { transform: [{ translateX: slideAnim }] }]}
       >
         {/* Шапка с аватаром */}
