@@ -117,6 +117,23 @@ class SocketService {
     return this.socket;
   }
 
+  /**
+   * Отправить координату на сервер через Socket.IO для мгновенной
+   * трансляции в админскую карту (без задержки REST-батча).
+   * Если сокет не подключён — тихо пропускаем (REST-батч подстрахует
+   * историю в БД, а админка получит координату в следующем событии).
+   */
+  emitLocation(point: {
+    lat: number;
+    lng: number;
+    speed?: number;
+    heading?: number;
+    recordedAt?: string;
+  }): void {
+    if (!this.socket?.connected) return;
+    this.socket.emit('driver:location', point);
+  }
+
   /** Проверить подключение */
   isConnected(): boolean {
     return this.socket?.connected ?? false;

@@ -11,6 +11,7 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { sendLocation } from '@/api/driver.api';
+import { socketService } from '@/services/socket.service';
 import { useLocationStore } from '@/stores/location.store';
 import { useConnectionStore } from '@/stores/connection.store';
 import type { LocationPoint } from '@/types/location';
@@ -109,13 +110,17 @@ export async function startForegroundTracking(
       distanceInterval: params.distanceInterval,
     },
     (location) => {
-      bufferPoint({
+      const point: LocationPoint = {
         lat: location.coords.latitude,
         lng: location.coords.longitude,
         speed: location.coords.speed ?? undefined,
         heading: location.coords.heading ?? undefined,
         recordedAt: new Date(location.timestamp).toISOString(),
-      });
+      };
+      // Живая отправка через Socket.IO — для мгновенного появления
+      // на карте в админке. REST-батч параллельно копит для истории.
+      socketService.emitLocation(point);
+      bufferPoint(point);
     },
   );
 
