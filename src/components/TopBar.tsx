@@ -9,6 +9,7 @@
  */
 
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
@@ -21,6 +22,7 @@ interface TopBarProps {
 }
 
 export function TopBar({ onMenuPress }: TopBarProps) {
+  const router = useRouter();
   const { status, toggleBusy, isUpdating } = useDriverStatus();
   const { isTracking } = useLocationTracking();
   const socketStatus = useConnectionStore((s) => s.socketStatus);
@@ -104,12 +106,16 @@ export function TopBar({ onMenuPress }: TopBarProps) {
       {/* Строка 2: баланс | рейтинг | поездки */}
       {profile && (
         <View style={styles.infoRow}>
-          <View style={styles.infoItem}>
+          <TouchableOpacity
+            style={styles.infoItem}
+            onPress={() => router.push('/(main)/balance' as never)}
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+          >
             <Ionicons name="wallet-outline" size={14} color="#6b7280" />
             <Text style={styles.infoText}>
               {Math.round(profile.balance ?? 0)} ₽
             </Text>
-          </View>
+          </TouchableOpacity>
           <View style={styles.infoDivider} />
           <View style={styles.infoItem}>
             <Ionicons name="star" size={14} color="#f59e0b" />

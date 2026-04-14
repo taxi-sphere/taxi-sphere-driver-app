@@ -172,6 +172,11 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
             onPress={() => navigate('/(main)/(tabs)/earnings')}
           />
           <MenuItem
+            icon="receipt-outline"
+            label="История операций"
+            onPress={() => navigate('/(main)/balance')}
+          />
+          <MenuItem
             icon="person-outline"
             label="Профиль"
             onPress={() => navigate('/(main)/(tabs)/profile')}

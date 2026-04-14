@@ -103,6 +103,14 @@ class SocketService {
     };
   }
 
+  /** Подписка на событие «баланс изменился» */
+  onBalanceChanged<T>(callback: EventCallback<T>): () => void {
+    this.socket?.on('balance:changed', callback);
+    return () => {
+      this.socket?.off('balance:changed', callback);
+    };
+  }
+
   /** Принудительное переподключение */
   reconnect(): void {
     if (this.socket) {

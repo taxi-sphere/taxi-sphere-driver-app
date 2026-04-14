@@ -132,11 +132,52 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
+    // Изменение баланса: инвалидация списка транзакций + профиль
+    // + локальная нотификация с деталями для водителя.
+    const unsubBalance = socketService.onBalanceChanged<{
+      amount: number;
+      balanceAfter: number;
+      description?: string | null;
+      orderNumber?: number | null;
+      type?: string;
+    }>((data) => {
+      void queryClient.invalidateQueries({ queryKey: ['balance', 'transactions'] });
+      void queryClient.invalidateQueries({ queryKey: ['driver', 'profile'] });
+
+      const amount = Number(data?.amount ?? 0);
+      const sign = amount >= 0 ? '+' : '';
+      const formatted = `${sign}${amount.toLocaleString('ru-RU')} ₽`;
+      const balanceStr = `${Number(data?.balanceAfter ?? 0).toLocaleString('ru-RU')} ₽`;
+
+      // Заголовок с деталями операции
+      let title = 'Изменение баланса';
+      if (data?.orderNumber != null) {
+        title = `Комиссия с заказа #${data.orderNumber}`;
+      } else if (data?.type === 'manual_deposit') {
+        title = 'Пополнение баланса';
+      } else if (data?.type === 'bonus') {
+        title = 'Начислен бонус';
+      } else if (data?.type === 'penalty') {
+        title = 'Штраф';
+      } else if (data?.type === 'shift_fee') {
+        title = 'Абонплата за смену';
+      } else if (data?.type === 'refund') {
+        title = 'Возврат на баланс';
+      }
+
+      void showLocalNotification(
+        title,
+        `${formatted}. Текущий баланс: ${balanceStr}`,
+        { type: 'balance_changed' },
+      );
+    });
+
     return () => {
       socket?.off('connect_error', handleConnectError);
       unsubNew();
       unsubStatus();
       unsubCanceled();
+      unsubBalance();
       socketService.disconnect();
     };
   }, [accessToken, queryClient]);

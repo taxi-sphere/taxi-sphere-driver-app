@@ -86,6 +86,12 @@ export default function MainLayout() {
           headerTitle: 'Настройки',
         }}
       />
+      <Stack.Screen
+        name="balance/index"
+        options={{
+          headerShown: false,
+        }}
+      />
     </Stack>
   );
 }
