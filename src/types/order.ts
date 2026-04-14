@@ -1,0 +1,106 @@
+/**
+ * @file: src/types/order.ts
+ * @description:
+ *   Типы заказов: статусы, доступные заказы, текущий заказ, остановки.
+ *   Контракты совпадают с /api/v1/driver/orders/* на backend.
+ * @dependencies: нет
+ * @created: 2026-03-12 18:00:00
+ * @updated: 2026-03-12 18:00:00
+ */
+
+/** Статус заказа */
+export type OrderStatus =
+  | 'new'
+  | 'searching'
+  | 'assigned'
+  | 'driver_arrived'
+  | 'in_progress'
+  | 'completed'
+  | 'canceled';
+
+/** Способ оплаты */
+export type PaymentMethod = 'cash' | 'card' | 'bonus';
+
+/** Промежуточная остановка */
+export interface OrderStop {
+  address: string;
+  lat: number | null;
+  lng: number | null;
+  entrance: string | null;
+  note: string | null;
+}
+
+/** Заказ из списка доступных (GET /driver/orders/available) */
+export interface AvailableOrder {
+  id: string;
+  orderNumber: number;
+  pickupAddress: string;
+  pickupLat: number | null;
+  pickupLng: number | null;
+  dropoffAddress: string | null;
+  dropoffLat: number | null;
+  dropoffLng: number | null;
+  estimatedPrice: number | null;
+  estimatedKm: number | null;
+  paymentMethod: PaymentMethod | null;
+  comment: string | null;
+  scheduledAt: string | null;
+  createdAt: string;
+  serviceName: string | null;
+  tariffName: string | null;
+  stopsCount: number;
+  distanceToPickup: number | null;
+}
+
+/** Текущий активный заказ (GET /driver/orders/current) */
+export interface CurrentOrder {
+  id: string;
+  orderNumber: number;
+  status: OrderStatus;
+  clientPhone: string;
+  clientName: string | null;
+  pickupAddress: string;
+  pickupLat: number | null;
+  pickupLng: number | null;
+  pickupEntrance: string | null;
+  pickupNote: string | null;
+  dropoffAddress: string | null;
+  dropoffLat: number | null;
+  dropoffLng: number | null;
+  dropoffEntrance: string | null;
+  dropoffNote: string | null;
+  estimatedPrice: number | null;
+  estimatedKm: number | null;
+  estimatedMin: number | null;
+  paymentMethod: PaymentMethod | null;
+  comment: string | null;
+  assignedAt: string | null;
+  startedAt: string | null;
+  serviceName: string | null;
+  tariffName: string | null;
+  stops: OrderStop[];
+}
+
+/** Мета-информация из API доступных заказов */
+export interface AvailableOrdersMeta {
+  effectiveRadius: number;
+  showOrdersWithoutGps: boolean;
+  hasGps: boolean;
+}
+
+/** Ответ принятия заказа (POST /driver/orders/{id}/accept) */
+export interface AcceptOrderResponse {
+  success: true;
+  message: string;
+  orderId: string;
+  orderNumber: string;
+}
+
+/** Ответ завершения заказа (POST /driver/orders/{id}/complete) */
+export interface CompleteOrderResponse {
+  success: true;
+  message: string;
+  orderId: string;
+  orderNumber: string;
+  finalPrice: number | null;
+}
