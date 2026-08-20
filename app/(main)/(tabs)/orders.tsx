@@ -17,16 +17,21 @@ import {
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
+import { useQuery } from '@tanstack/react-query';
 import { useAvailableOrders } from '@/hooks/useAvailableOrders';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useConnectionStore } from '@/stores/connection.store';
 import { socketService } from '@/services/socket.service';
 import { formatCurrency, formatDistance } from '@/lib/utils';
+import { IncomingOrderModal } from '@/components/IncomingOrderModal';
+import { getOrderEtaEstimate } from '@/api/orders.api';
 import type { AvailableOrder } from '@/types/order';
+
+const ACCEPT_TIMER_SEC = 30;
+const DEFAULT_ETA_MIN = 5;
 
 const RETRY_INTERVAL = 15; // секунд
 
@@ -80,19 +85,38 @@ export default function OrdersScreen() {
     setTimeout(() => setIsRetrying(false), 2000);
   }, []);
 
-  const handleAccept = (order: AvailableOrder) => {
-    Alert.alert(
-      'Принять заказ?',
-      `${order.pickupAddress}\n${formatCurrency(order.estimatedPrice)}`,
-      [
-        { text: 'Отмена', style: 'cancel' },
-        {
-          text: 'Принять',
-          onPress: () => accept.mutate(order.id),
-        },
-      ],
-    );
-  };
+  // Выбранный заказ для модалки подтверждения
+  const [pendingOrder, setPendingOrder] = useState<AvailableOrder | null>(null);
+
+  // Загрузка рекомендованного времени подачи от сервера
+  const etaQuery = useQuery({
+    queryKey: ['order', pendingOrder?.id, 'eta-estimate'],
+    queryFn: () => getOrderEtaEstimate(pendingOrder!.id),
+    enabled: !!pendingOrder,
+    retry: 1,
+    staleTime: 0,
+    gcTime: 0,
+  });
+
+  const handleAccept = useCallback((order: AvailableOrder) => {
+    setPendingOrder(order);
+  }, []);
+
+  const handleConfirmAccept = useCallback(
+    (pickupEtaMin: number) => {
+      if (!pendingOrder) return;
+      accept.mutate(
+        { orderId: pendingOrder.id, pickupEtaMin },
+        { onSettled: () => setPendingOrder(null) },
+      );
+    },
+    [accept, pendingOrder],
+  );
+
+  const handleDismissModal = useCallback(() => {
+    if (accept.isPending) return;
+    setPendingOrder(null);
+  }, [accept.isPending]);
 
   const renderOrder = useCallback(({ item }: { item: AvailableOrder }) => (
     <OrderCard item={item} onAccept={handleAccept} />
@@ -180,6 +204,18 @@ export default function OrdersScreen() {
           }
         />
       )}
+
+      <IncomingOrderModal
+        visible={!!pendingOrder}
+        order={pendingOrder}
+        mode="confirm"
+        timerSec={ACCEPT_TIMER_SEC}
+        initialEtaMin={etaQuery.data?.etaMin ?? DEFAULT_ETA_MIN}
+        etaLoading={etaQuery.isFetching}
+        accepting={accept.isPending}
+        onAccept={handleConfirmAccept}
+        onDismiss={handleDismissModal}
+      />
     </View>
   );
 }
@@ -211,6 +247,14 @@ const OrderCard = memo(function OrderCard({
             {item.pickupAddress}
           </Text>
         </View>
+        {(item.stops ?? []).map((stop, i) => (
+          <View key={i} style={cardStyles.addressRow}>
+            <View style={[cardStyles.dot, cardStyles.dotYellow]} />
+            <Text style={cardStyles.addressTextStop} numberOfLines={1}>
+              {stop.address}
+            </Text>
+          </View>
+        ))}
         {item.dropoffAddress && (
           <View style={cardStyles.addressRow}>
             <View style={[cardStyles.dot, cardStyles.dotRed]} />
@@ -261,12 +305,14 @@ const cardStyles = StyleSheet.create({
   },
   orderNumber: { fontSize: 13, fontWeight: '600', color: '#6b7280' },
   orderPrice: { fontSize: 18, fontWeight: '700', color: '#111827' },
-  orderAddresses: { gap: 6, marginBottom: 10 },
-  addressRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  orderAddresses: { gap: 4, marginBottom: 8 },
+  addressRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   dotGreen: { backgroundColor: '#22c55e' },
+  dotYellow: { backgroundColor: '#f59e0b' },
   dotRed: { backgroundColor: '#ef4444' },
   addressText: { fontSize: 14, color: '#374151', flex: 1 },
+  addressTextStop: { fontSize: 13, color: '#6b7280', flex: 1 },
   orderFooter: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   orderMeta: { fontSize: 12, color: '#9ca3af' },
   tariffBadge: {

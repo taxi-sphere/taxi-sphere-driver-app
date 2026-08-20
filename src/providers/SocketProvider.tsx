@@ -17,7 +17,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { socketService } from '@/services/socket.service';
 import { showLocalNotification } from '@/services/notification.service';
 import * as tokenService from '@/services/token.service';
-import { getApiBase, API_TIMEOUT_MS } from '@/lib/constants';
+import { getApiBase, API_TIMEOUT_MS, fetchServerConfig } from '@/lib/constants';
 
 /** Попытка refresh токена, возвращает новый accessToken или null */
 async function tryRefreshToken(): Promise<string | null> {
@@ -71,7 +71,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     }
 
     refreshAttempted.current = false;
-    socketService.connect(accessToken);
+
+    // Загрузить socket URL с сервера ДО подключения
+    fetchServerConfig().finally(() => {
+      socketService.connect(accessToken);
+    });
 
     // При ошибке токена — попробовать refresh
     const handleConnectError = async (err: Error) => {
@@ -120,6 +124,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     });
 
     const unsubCanceled = socketService.onOrderCanceled((data) => {
+      // Сброс кэша сразу, чтобы placeholderData не удерживал отменённый заказ
+      queryClient.setQueryData(['orders', 'current'], null);
       void queryClient.invalidateQueries({ queryKey: ['orders', 'current'] });
       void queryClient.invalidateQueries({ queryKey: ['orders', 'available'] });
       if (AppState.currentState !== 'active') {

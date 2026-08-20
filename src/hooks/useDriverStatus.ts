@@ -46,26 +46,15 @@ export function useDriverStatus() {
     retryDelay: 1000,
   });
 
-  /** Переключение: offline → online, online/busy → offline */
-  const toggleOnline = () => {
+  /** Переключение Свободен ↔ Занят. Любой иной статус → Свободен. */
+  const toggleBusy = () => {
     if (mutation.isPending) return;
-    // В активном заказе менять статус нельзя — сервер возвращает 400
-    if (status === 'on_order') return;
-    const next = status === 'offline' ? 'online' : 'offline';
+    const next = status === 'online' ? 'busy' : 'online';
     mutation.mutate(next);
   };
 
-  /** Переключение: online ↔ busy, offline → online */
-  const toggleBusy = () => {
-    if (mutation.isPending) return;
-    if (status === 'on_order') return;
-    if (status === 'offline') {
-      mutation.mutate('online');
-      return;
-    }
-    const next = status === 'busy' ? 'online' : 'busy';
-    mutation.mutate(next);
-  };
+  /** Алиас для обратной совместимости (использовался для offline-переключения). */
+  const toggleOnline = toggleBusy;
 
   return {
     status,

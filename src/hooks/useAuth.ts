@@ -10,8 +10,12 @@
 import { useMutation } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth.store';
 import { useSettingsStore } from '@/stores/settings.store';
+import { useDriverStore } from '@/stores/driver.store';
 import * as authApi from '@/api/auth.api';
+import * as driverApi from '@/api/driver.api';
 import * as tokenService from '@/services/token.service';
+import { driverLogger } from '@/services/logger.service';
+import { fetchServerConfig } from '@/lib/constants';
 import { Platform } from 'react-native';
 
 /** Вход по телефону и паролю */
@@ -38,6 +42,22 @@ export function useLogin() {
         data.data.user,
       );
       setLastPhone(variables.phone);
+
+      // Загрузить конфигурацию сервера (socket URL и пр.) ДО того как
+      // SocketProvider попытается подключиться.
+      await fetchServerConfig();
+
+      // После логина ставим «Занят» по умолчанию — чтобы водителю не прилетел
+      // заказ, пока он не нажал «Свободен» вручную.
+      try {
+        await driverApi.setStatus('busy');
+        useDriverStore.getState().setStatus('busy');
+      } catch (err) {
+        driverLogger.warn('Не удалось установить начальный статус busy после логина', {
+          action: 'auth:login:set-default-status',
+          extra: { error: err instanceof Error ? err.message : String(err) },
+        });
+      }
     },
     onSettled: () => setLoading(false),
   });

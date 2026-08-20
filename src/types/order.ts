@@ -45,10 +45,11 @@ export interface AvailableOrder {
   paymentMethod: PaymentMethod | null;
   comment: string | null;
   scheduledAt: string | null;
-  createdAt: string;
+  createdAt?: string;
   serviceName: string | null;
   tariffName: string | null;
   stopsCount: number;
+  stops: OrderStop[];
   distanceToPickup: number | null;
 }
 
@@ -74,6 +75,7 @@ export interface CurrentOrder {
   estimatedMin: number | null;
   paymentMethod: PaymentMethod | null;
   comment: string | null;
+  createdAt?: string;
   assignedAt: string | null;
   startedAt: string | null;
   serviceName: string | null;

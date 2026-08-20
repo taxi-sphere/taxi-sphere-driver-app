@@ -32,13 +32,17 @@ export function useOrderActions() {
   };
 
   const accept = useMutation({
-    mutationFn: (orderId: string) => ordersApi.acceptOrder(orderId),
-    onSuccess: (_, orderId) => {
-      driverLogger.info('Order accepted', { action: 'accept_order', extra: { orderId } });
+    mutationFn: ({ orderId, pickupEtaMin }: { orderId: string; pickupEtaMin?: number }) =>
+      ordersApi.acceptOrder(orderId, pickupEtaMin),
+    onSuccess: (_, vars) => {
+      driverLogger.info('Order accepted', {
+        action: 'accept_order',
+        extra: { orderId: vars.orderId, pickupEtaMin: vars.pickupEtaMin ?? null },
+      });
       setStatus('on_order');
       invalidateOrders();
     },
-    onError: (err, orderId) => logMutationError('accept_order', err, orderId),
+    onError: (err, vars) => logMutationError('accept_order', err, vars.orderId),
   });
 
   const arrive = useMutation({
@@ -72,6 +76,9 @@ export function useOrderActions() {
         action: 'complete_order',
         extra: { orderId: vars.orderId, finalPrice: vars.finalPrice ?? null },
       });
+      // Сбрасываем кэш текущего заказа СРАЗУ, чтобы placeholderData
+      // не удерживал старые данные и useCurrentOrder не дёргал статус обратно
+      queryClient.setQueryData(['orders', 'current'], null);
       setStatus('online');
       invalidateOrders();
       void queryClient.invalidateQueries({ queryKey: ['driver', 'profile'] });

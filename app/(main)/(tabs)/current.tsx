@@ -552,13 +552,13 @@ const styles = StyleSheet.create({
   addressesCard: {
     backgroundColor: '#ffffff',
     borderRadius: 12,
-    padding: 14,
-    gap: 14,
+    padding: 12,
+    gap: 8,
   },
   addressRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 10,
+    gap: 8,
   },
   dot: {
     width: 10,
@@ -579,15 +579,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   addressLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
     color: '#9ca3af',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginBottom: 2,
   },
   addressText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#374151',
   },
   addressNote: {

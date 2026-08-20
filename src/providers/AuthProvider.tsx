@@ -11,6 +11,7 @@
 import { useEffect } from 'react';
 import { useRouter, useSegments } from 'expo-router';
 import { useAuthStore } from '@/stores/auth.store';
+import { fetchServerConfig } from '@/lib/constants';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { isReady, hydrate } = useAuthStore();
@@ -22,6 +23,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void hydrate();
   }, [hydrate]);
+
+  // После гидрации, если пользователь залогинен — загрузить socket URL с сервера
+  useEffect(() => {
+    if (isReady && isAuthenticated) {
+      void fetchServerConfig();
+    }
+  }, [isReady, isAuthenticated]);
 
   // Перенаправление по auth state
   useEffect(() => {

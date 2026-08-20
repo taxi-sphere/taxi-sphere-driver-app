@@ -62,11 +62,30 @@ export async function getCurrentOrder(): Promise<CurrentOrder | null> {
   return parsed.data.order;
 }
 
-/** Принять заказ */
+/** Принять заказ с указанием времени подачи в минутах */
 export async function acceptOrder(
   orderId: string,
+  pickupEtaMin?: number,
 ): Promise<AcceptOrderResponse> {
-  return apiPost<AcceptOrderResponse>(`driver/orders/${orderId}/accept`);
+  return apiPost<AcceptOrderResponse>(
+    `driver/orders/${orderId}/accept`,
+    pickupEtaMin != null ? { pickupEtaMin } : undefined,
+  );
+}
+
+/** Рекомендуемое время подачи (минуты) от GPS водителя до точки подачи заказа. */
+export interface EtaEstimateResponse {
+  etaMin: number;
+  distanceKm: number | null;
+  provider: '2gis' | 'yandex' | 'haversine';
+  usedFallback: boolean;
+}
+
+/** Получить рекомендуемое время подачи для заказа (через выбранного провайдера). */
+export async function getOrderEtaEstimate(
+  orderId: string,
+): Promise<EtaEstimateResponse> {
+  return apiGet<EtaEstimateResponse>(`driver/orders/${orderId}/eta-estimate`);
 }
 
 /** Отметить «прибыл на место» */

@@ -27,12 +27,12 @@ import { useLogin } from '@/hooks/useAuth';
 import { useSettingsStore } from '@/stores/settings.store';
 
 export default function LoginScreen() {
+  const { serverUrl, setServerUrl, lastPhone } = useSettingsStore();
   const [phone, setPhone] = useState(lastPhone || '+7');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showServerSettings, setShowServerSettings] = useState(false);
   const login = useLogin();
-  const { serverUrl, setServerUrl, lastPhone } = useSettingsStore();
   const [serverInput, setServerInput] = useState(serverUrl);
 
   const handleLogin = () => {

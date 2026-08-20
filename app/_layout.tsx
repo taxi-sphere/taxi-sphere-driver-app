@@ -51,12 +51,21 @@ function installGlobalErrorHandler() {
     });
   }
 
-  // Unhandled promise rejections
-  const tracking = (globalThis as unknown as { HermesInternal?: unknown }).HermesInternal;
-  if (tracking) {
-    // В Hermes promise rejections ловятся через process.on или global
-    // (в Expo/RN это обычно работает через polyfill — пропускаем строгую проверку)
-  }
+  // Unhandled promise rejections — ловим через polyfill, доступный в RN/Hermes
+  const g = globalThis as unknown as {
+    onunhandledrejection?: ((event: { reason?: unknown }) => void) | null;
+  };
+  g.onunhandledrejection = (event) => {
+    const reason = event?.reason;
+    const message =
+      reason instanceof Error ? reason.message : String(reason ?? 'Unknown rejection');
+    const stack = reason instanceof Error ? reason.stack : null;
+    driverLogger.error(`Unhandled rejection: ${message}`, {
+      stack,
+      screen: 'global',
+      action: 'unhandled_rejection',
+    });
+  };
 }
 
 installGlobalErrorHandler();

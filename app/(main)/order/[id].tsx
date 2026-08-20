@@ -8,21 +8,25 @@
  * @updated: 2026-03-12 18:00:00
  */
 
+import { useState } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { getAvailableOrders } from '@/api/orders.api';
+import { getAvailableOrders, getOrderEtaEstimate } from '@/api/orders.api';
 import { useOrderActions } from '@/hooks/useOrderActions';
+import { IncomingOrderModal } from '@/components/IncomingOrderModal';
 import { formatCurrency, formatDistance } from '@/lib/utils';
+
+const ACCEPT_TIMER_SEC = 30;
+const DEFAULT_ETA_MIN = 5;
 
 export default function OrderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -38,23 +42,36 @@ export default function OrderDetailScreen() {
 
   const order = orders?.items.find((o) => o.id === id);
 
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const etaQuery = useQuery({
+    queryKey: ['order', order?.id, 'eta-estimate'],
+    queryFn: () => getOrderEtaEstimate(order!.id),
+    enabled: confirmOpen && !!order,
+    retry: 1,
+    staleTime: 0,
+    gcTime: 0,
+  });
+
   const handleAccept = () => {
     if (!order) return;
-    Alert.alert(
-      'Принять заказ?',
-      `${order.pickupAddress}\n${formatCurrency(order.estimatedPrice)}`,
-      [
-        { text: 'Отмена', style: 'cancel' },
-        {
-          text: 'Принять',
-          onPress: () => {
-            accept.mutate(order.id, {
-              onSuccess: () => router.back(),
-            });
-          },
-        },
-      ],
+    setConfirmOpen(true);
+  };
+
+  const handleConfirmAccept = (pickupEtaMin: number) => {
+    if (!order) return;
+    accept.mutate(
+      { orderId: order.id, pickupEtaMin },
+      {
+        onSuccess: () => router.back(),
+        onSettled: () => setConfirmOpen(false),
+      },
     );
+  };
+
+  const handleDismissModal = () => {
+    if (accept.isPending) return;
+    setConfirmOpen(false);
   };
 
   if (!order) {
@@ -160,6 +177,18 @@ export default function OrderDetailScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      <IncomingOrderModal
+        visible={confirmOpen}
+        order={order}
+        mode="confirm"
+        timerSec={ACCEPT_TIMER_SEC}
+        initialEtaMin={etaQuery.data?.etaMin ?? DEFAULT_ETA_MIN}
+        etaLoading={etaQuery.isFetching}
+        accepting={accept.isPending}
+        onAccept={handleConfirmAccept}
+        onDismiss={handleDismissModal}
+      />
     </SafeAreaView>
   );
 }

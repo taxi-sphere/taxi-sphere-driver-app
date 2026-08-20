@@ -66,11 +66,54 @@ export function getApiBase(): string {
 
 /**
  * URL Socket.IO сервера.
- * Socket.IO работает на том же порту что и API (встроен в Next.js сервер).
- * Водитель вводит один URL — всё работает автоматически.
+ *
+ * Порт сокет-сервера задаётся в .env на стороне бэкенда (SOCKET_PORT)
+ * и может быть любым. Клиент узнаёт его автоматически через
+ * GET /api/v1/config при запуске — результат кэшируется в _cachedSocketUrl.
+ *
+ * Переопределить можно через EXPO_PUBLIC_SOCKET_URL при билде.
+ */
+
+let _cachedSocketUrl: string | null = null;
+
+/** Сбросить кэш (при смене сервера в настройках). */
+export function resetSocketUrlCache(): void {
+  _cachedSocketUrl = null;
+}
+
+/**
+ * Получить socket URL. Если кэш пуст — вернёт API URL как временный fallback.
+ * Реальный socket URL загружается через fetchServerConfig() при старте.
  */
 export function getSocketUrl(): string {
+  const envOverride = process.env.EXPO_PUBLIC_SOCKET_URL;
+  if (envOverride) return envOverride.replace(/\/$/, '');
+  if (_cachedSocketUrl) return _cachedSocketUrl;
   return getApiUrl();
+}
+
+/**
+ * Загрузить конфигурацию с сервера (socket URL и др.).
+ * Вызывается один раз при запуске / после логина.
+ */
+export async function fetchServerConfig(): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5_000);
+  try {
+    const url = `${getApiUrl()}/api/v1/config`;
+    console.log('[Config] fetching:', url);
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return;
+    const data = (await res.json()) as { socketUrl?: string };
+    if (data.socketUrl) {
+      _cachedSocketUrl = data.socketUrl.replace(/\/$/, '');
+      console.log('[Config] socketUrl:', _cachedSocketUrl);
+    }
+  } catch (err) {
+    console.log('[Config] failed:', err instanceof Error ? err.message : String(err));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Обратная совместимость — статические значения для начальной загрузки

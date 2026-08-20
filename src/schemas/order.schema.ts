@@ -33,10 +33,11 @@ export const availableOrderSchema = z.object({
   paymentMethod: paymentMethodSchema,
   comment: z.string().nullable(),
   scheduledAt: z.string().nullable(),
-  createdAt: z.string(),
+  createdAt: z.string().optional(),
   serviceName: z.string().nullable(),
   tariffName: z.string().nullable(),
   stopsCount: z.number(),
+  stops: z.array(orderStopSchema).default([]),
   distanceToPickup: z.number().nullable(),
 });
 
@@ -80,6 +81,7 @@ export const currentOrderSchema = z.object({
   estimatedMin: z.number().nullable(),
   paymentMethod: paymentMethodSchema,
   comment: z.string().nullable(),
+  createdAt: z.string().optional(),
   assignedAt: z.string().nullable(),
   startedAt: z.string().nullable(),
   serviceName: z.string().nullable(),

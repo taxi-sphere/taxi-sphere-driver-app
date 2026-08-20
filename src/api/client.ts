@@ -9,9 +9,10 @@
  * @updated: 2026-03-12 18:00:00
  */
 
-import ky, { type KyInstance, type Options } from 'ky';
+import ky, { HTTPError, type KyInstance, type Options } from 'ky';
 import { getApiBase, API_TIMEOUT_MS, API_RETRY_COUNT } from '@/lib/constants';
 import { useAuthStore } from '@/stores/auth.store';
+import { driverLogger } from '@/services/logger.service';
 import * as tokenService from '@/services/token.service';
 
 /* -------------------------------------------------------------------------- */
@@ -98,6 +99,46 @@ export const api: KyInstance = ky.create({
         return ky(request);
       },
     ],
+    beforeError: [
+      async (error: HTTPError) => {
+        const { request, response } = error;
+
+        // Пытаемся вытащить человеческий текст из тела ответа { error: '...' }
+        let serverMessage: string | undefined;
+        try {
+          const data = (await response.clone().json()) as
+            | { error?: string; message?: string }
+            | null;
+          serverMessage = data?.error ?? data?.message;
+        } catch {
+          // тело не JSON — оставляем стандартное сообщение
+        }
+
+        if (serverMessage) {
+          error.message = serverMessage;
+        }
+
+        // Логируем все 4xx/5xx (кроме 401 — там идёт refresh-flow) в админский лог
+        if (response.status !== 401) {
+          try {
+            const url = new URL(request.url);
+            driverLogger.error(`HTTP ${response.status}: ${url.pathname}`, {
+              action: `api:${request.method}:${url.pathname}`,
+              extra: {
+                method: request.method,
+                path: url.pathname,
+                status: response.status,
+                serverMessage: serverMessage ?? null,
+              },
+            });
+          } catch {
+            // неверный URL — не должно случаться, но не мешаем основному потоку
+          }
+        }
+
+        return error;
+      },
+    ],
   },
 });
 
@@ -112,12 +153,31 @@ function buildUrl(path: string): string {
   return `${base}${normalized}`;
 }
 
+/**
+ * Логирование сетевых ошибок (timeout, offline, DNS failure).
+ * HTTPError уже логируется в beforeError хуке выше.
+ */
+function logNetworkError(method: string, path: string, err: unknown): void {
+  if (err instanceof HTTPError) return; // уже залогировано в beforeError
+  const message = err instanceof Error ? err.message : String(err);
+  const name = err instanceof Error ? err.name : 'UnknownError';
+  driverLogger.error(`Network error: ${method} ${path} — ${message}`, {
+    action: `network:${method}:${path}`,
+    extra: { method, path, errorName: name },
+  });
+}
+
 /** GET-запрос с типизированным ответом */
 export async function apiGet<T>(
   path: string,
   options?: Options,
 ): Promise<T> {
-  return api.get(buildUrl(path), options).json<T>();
+  try {
+    return await api.get(buildUrl(path), options).json<T>();
+  } catch (err) {
+    logNetworkError('GET', path, err);
+    throw err;
+  }
 }
 
 /** POST-запрос с типизированным ответом */
@@ -126,7 +186,12 @@ export async function apiPost<T>(
   json?: unknown,
   options?: Options,
 ): Promise<T> {
-  return api.post(buildUrl(path), { json, ...options }).json<T>();
+  try {
+    return await api.post(buildUrl(path), { json, ...options }).json<T>();
+  } catch (err) {
+    logNetworkError('POST', path, err);
+    throw err;
+  }
 }
 
 /** PATCH-запрос с типизированным ответом */
@@ -135,5 +200,10 @@ export async function apiPatch<T>(
   json?: unknown,
   options?: Options,
 ): Promise<T> {
-  return api.patch(buildUrl(path), { json, ...options }).json<T>();
+  try {
+    return await api.patch(buildUrl(path), { json, ...options }).json<T>();
+  } catch (err) {
+    logNetworkError('PATCH', path, err);
+    throw err;
+  }
 }
