@@ -29,11 +29,9 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
  * читается runtime и работает и в dev, и в production build.
  */
 function getCurrentAppVersion(): string {
-  return (
-    (Constants.expoConfig?.version as string | undefined) ??
-    (Constants.manifest?.version as string | undefined) ??
-    '0.0.0'
-  );
+  // В Expo SDK 55+ единственный поддерживаемый способ — Constants.expoConfig.
+  // Legacy Constants.manifest deprecated и его типы удалены в 55.
+  return (Constants.expoConfig?.version as string | undefined) ?? '0.0.0';
 }
 
 export interface AppUpdateState {
