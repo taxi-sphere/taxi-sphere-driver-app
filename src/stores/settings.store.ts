@@ -23,6 +23,14 @@ interface SettingsState {
   preferredNavigator: NavigatorApp;
   themeMode: ThemeMode;
   lastPhone: string;
+  /**
+   * v1.99.22+: opt-in на beta-канал обновлений приложения.
+   * По умолчанию false — водитель получает только production-релизы.
+   * Включается вручную в Settings → «Разработчику». При включении
+   * `useAppUpdate` начинает опрашивать `?channel=beta` (с ближайшего
+   * старта приложения).
+   */
+  betaChannel: boolean;
 
   setServerUrl: (url: string) => void;
   setSoundEnabled: (enabled: boolean) => void;
@@ -31,6 +39,7 @@ interface SettingsState {
   setPreferredNavigator: (nav: NavigatorApp) => void;
   setThemeMode: (mode: ThemeMode) => void;
   setLastPhone: (phone: string) => void;
+  setBetaChannel: (enabled: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -43,6 +52,7 @@ export const useSettingsStore = create<SettingsState>()(
       preferredNavigator: 'yandex',
       themeMode: 'system',
       lastPhone: '',
+      betaChannel: false,
 
       setServerUrl: (serverUrl) => set({ serverUrl }),
       setSoundEnabled: (soundEnabled) => set({ soundEnabled }),
@@ -52,6 +62,7 @@ export const useSettingsStore = create<SettingsState>()(
         set({ preferredNavigator }),
       setThemeMode: (themeMode) => set({ themeMode }),
       setLastPhone: (lastPhone) => set({ lastPhone }),
+      setBetaChannel: (betaChannel) => set({ betaChannel }),
     }),
     {
       name: 'ts-driver-settings',

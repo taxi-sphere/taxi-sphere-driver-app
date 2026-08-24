@@ -18,11 +18,13 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useSettingsStore } from '@/stores/settings.store';
+import { useAppUpdate } from '@/hooks/useAppUpdate';
 
 type NavigatorApp = 'yandex' | '2gis' | 'google';
 
@@ -40,15 +42,56 @@ export default function SettingsScreen() {
     voiceAlerts,
     preferredNavigator,
     themeMode,
+    betaChannel,
     setServerUrl,
     setSoundEnabled,
     setVibrationEnabled,
     setVoiceAlerts,
     setPreferredNavigator,
     setThemeMode,
+    setBetaChannel,
   } = useSettingsStore();
 
+  const { channel, latest, hasUpdate, checking, refresh } = useAppUpdate();
+
   const [serverInput, setServerInput] = useState(serverUrl);
+
+  const handleBetaToggle = (next: boolean) => {
+    if (next) {
+      // Explicit opt-in — предупреждаем о риске
+      Alert.alert(
+        'Включить beta-канал?',
+        'Beta-версии могут содержать нестабильные функции и баги. ' +
+          'Обычно они выпускаются на несколько дней раньше основных релизов ' +
+          'для проверки. Если что-то сломается — выключите этот переключатель ' +
+          'и переустановите основную (production) версию через админку.',
+        [
+          { text: 'Отмена', style: 'cancel' },
+          {
+            text: 'Включить',
+            style: 'destructive',
+            onPress: () => {
+              setBetaChannel(true);
+              // Немедленно перезапросить последнюю версию в новом канале
+              void refresh();
+            },
+          },
+        ],
+      );
+    } else {
+      setBetaChannel(false);
+      void refresh();
+    }
+  };
+
+  const handleCheckNow = async () => {
+    await refresh();
+    if (hasUpdate && latest) {
+      Alert.alert('Доступна новая версия', `Версия ${latest.latestVersion}`);
+    } else {
+      Alert.alert('Обновлений нет', 'У вас последняя версия');
+    }
+  };
 
   const handleSaveServer = () => {
     const url = serverInput.trim().replace(/\/$/, '');
@@ -164,7 +207,43 @@ export default function SettingsScreen() {
             <Text style={styles.infoLabel}>Версия</Text>
             <Text style={styles.infoValue}>{Constants.expoConfig?.version ?? '?'}</Text>
           </View>
+          <View style={styles.separator} />
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Канал обновлений</Text>
+            <Text style={styles.infoValue}>
+              {channel === 'beta' ? 'Beta' : 'Production'}
+            </Text>
+          </View>
+          <View style={styles.separator} />
+          <TouchableOpacity
+            style={styles.infoRow}
+            onPress={() => void handleCheckNow()}
+            disabled={checking}
+          >
+            <Text style={styles.infoLabel}>
+              {checking ? 'Проверка...' : 'Проверить обновления'}
+            </Text>
+            {checking ? (
+              <ActivityIndicator size="small" color="#4f46e5" />
+            ) : (
+              <Ionicons name="refresh" size={18} color="#4f46e5" />
+            )}
+          </TouchableOpacity>
         </View>
+
+        {/* Разработчику */}
+        <Text style={styles.sectionTitle}>Разработчику</Text>
+        <View style={styles.card}>
+          <SettingSwitch
+            label="Beta-канал обновлений"
+            value={betaChannel}
+            onValueChange={handleBetaToggle}
+          />
+        </View>
+        <Text style={styles.hint}>
+          Включив beta-канал, вы будете получать предварительные версии
+          приложения раньше остальных. Могут быть нестабильны.
+        </Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -333,5 +412,14 @@ const styles = StyleSheet.create({
   infoValue: {
     fontSize: 14,
     color: '#9ca3af',
+  },
+
+  // Hint (под секцией разработчика)
+  hint: {
+    fontSize: 11,
+    color: '#9ca3af',
+    lineHeight: 15,
+    paddingHorizontal: 4,
+    marginTop: 4,
   },
 });

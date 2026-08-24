@@ -20,6 +20,7 @@ import { Platform, AppState, type AppStateStatus } from 'react-native';
 import Constants from 'expo-constants';
 import { fetchLatestAppRelease, type DriverAppLatestPublicDTO } from '@/api/app.api';
 import { compareSemver } from '@/lib/semver';
+import { useSettingsStore } from '@/stores/settings.store';
 
 /** Как часто проверять в фоне (мс). 4 часа — компромисс: свежесть vs трафик. */
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -37,6 +38,8 @@ function getCurrentAppVersion(): string {
 export interface AppUpdateState {
   /** Текущая установленная версия. */
   currentVersion: string;
+  /** Активный канал обновлений. */
+  channel: 'production' | 'beta';
   /** Данные последней доступной версии, если проверка прошла. */
   latest: DriverAppLatestPublicDTO | null;
   /** true если latestVersion > currentVersion. */
@@ -55,6 +58,11 @@ export interface AppUpdateState {
 
 export function useAppUpdate(): AppUpdateState {
   const currentVersion = getCurrentAppVersion();
+  // Beta-канал: opt-in из настроек, persisted в AsyncStorage.
+  // Смена канала переопросит latest автоматически (channel в deps check).
+  const betaChannel = useSettingsStore((s) => s.betaChannel);
+  const channel: 'production' | 'beta' = betaChannel ? 'beta' : 'production';
+
   const [latest, setLatest] = useState<DriverAppLatestPublicDTO | null>(null);
   const [checking, setChecking] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -64,13 +72,13 @@ export function useAppUpdate(): AppUpdateState {
     if (Platform.OS !== 'android') return; // на iOS APK-installer недоступен
     setChecking(true);
     try {
-      const data = await fetchLatestAppRelease(currentVersion, 'production');
+      const data = await fetchLatestAppRelease(currentVersion, channel);
       setLatest(data);
       lastCheckAtRef.current = Date.now();
     } finally {
       setChecking(false);
     }
-  }, [currentVersion]);
+  }, [currentVersion, channel]);
 
   // Первая проверка при монтировании
   useEffect(() => {
@@ -105,6 +113,7 @@ export function useAppUpdate(): AppUpdateState {
 
   return {
     currentVersion,
+    channel,
     latest,
     hasUpdate,
     isForced,
