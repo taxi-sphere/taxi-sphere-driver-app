@@ -17,6 +17,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { AppProviders } from '@/providers/AppProviders';
 import { useAuthStore } from '@/stores/auth.store';
 import { RootErrorBoundary } from '@/components/RootErrorBoundary';
+import { AppUpdateNotifier } from '@/components/AppUpdateNotifier';
 import { driverLogger } from '@/services/logger.service';
 
 // Не скрывать splash до готовности
@@ -84,6 +85,7 @@ export default function RootLayout() {
     <RootErrorBoundary>
       <AppProviders>
         <StatusBar style="dark" />
+        <AppUpdateNotifier />
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="index" />
           <Stack.Screen name="(auth)" />
