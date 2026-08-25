@@ -13,7 +13,7 @@
  * @created: 2026-08-25
  */
 
-const { withAppBuildGradle } = require('expo/config-plugins');
+const { withAppBuildGradle, withGradleProperties } = require('expo/config-plugins');
 
 const READ_PROPS_MARKER = 'TAXI_SPHERE_UPLOAD_STORE_FILE';
 
@@ -37,7 +37,32 @@ const RELEASE_SIGNING_SNIPPET = `        release {
         }
     }`;
 
+/**
+ * Правит android/gradle.properties: поднимает JVM heap и Metaspace для gradle
+ * daemon. Дефолт (Xmx=2G, MaxMetaspaceSize=512m) недостаточен для release
+ * assembleRelease с newArchEnabled=true и множеством KSP-процессоров —
+ * expo-updates:kspReleaseKotlin падает с OOM Metaspace. Значения соответствуют
+ * рекомендациям Expo/RN для CI с ubuntu-latest (7 GB RAM).
+ */
+function bumpGradleJvmArgs(config) {
+  return withGradleProperties(config, (cfg) => {
+    const KEY = 'org.gradle.jvmargs';
+    const VALUE = '-Xmx6144m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8';
+    const props = cfg.modResults;
+    const existing = props.find(
+      (p) => p.type === 'property' && p.key === KEY,
+    );
+    if (existing) {
+      existing.value = VALUE;
+    } else {
+      props.push({ type: 'property', key: KEY, value: VALUE });
+    }
+    return cfg;
+  });
+}
+
 module.exports = function withReleaseKeystore(config) {
+  config = bumpGradleJvmArgs(config);
   return withAppBuildGradle(config, (cfg) => {
     let src = cfg.modResults.contents;
 
