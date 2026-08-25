@@ -142,21 +142,24 @@ jobs:
           generate_release_notes: true
           files: android/app/build/outputs/apk/release/app-release.apk
 
-      # ── 11. Регистрируем релиз в БД Taxi Sphere ─────────────────────────────
-      # Backend endpoint POST /api/admin/driver-app/releases:register-external
-      # (или расширенный /releases с service-token) сохраняет запись с apkUrl,
-      # apkSha256, apkSizeBytes. isCurrent = true.
-      - name: Register release in Taxi Sphere admin
+      # ── 11. Регистрируем релиз в БД Taxi Sphere (non-blocking) ──────────────
+      # Backend >= v1.99.25 поддерживает X-Service-Token bypass RBAC.
+      # На старых версиях вернётся 403 — это не блокирует workflow: сборка и
+      # GitHub Release уже готовы, админ сможет вставить URL в /admin/driver-app/releases
+      # вручную. Продолжаем всегда через `continue-on-error`.
+      - name: Register release in Taxi Sphere admin (non-blocking)
+        continue-on-error: true
         env:
           ADMIN_API_URL: ${{ secrets.ADMIN_API_URL }}
           ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
+          APK_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.parse.outputs.tag }}/app-release.apk"
           if [ -z "$ADMIN_API_URL" ] || [ -z "$ADMIN_API_TOKEN" ]; then
-            echo "::warning::ADMIN_API_URL / ADMIN_API_TOKEN не заданы — пропускаю регистрацию в БД. Добавьте запись вручную в /admin/driver-app/releases с URL:"
-            echo "  https://github.com/${{ github.repository }}/releases/download/${{ steps.parse.outputs.tag }}/app-release.apk"
+            echo "::warning::ADMIN_API_URL / ADMIN_API_TOKEN не заданы — пропускаю регистрацию в БД."
+            echo "Ручная регистрация: /admin/driver-app/releases → «Опубликовать релиз» → URL:"
+            echo "  $APK_URL"
             exit 0
           fi
-          APK_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.parse.outputs.tag }}/app-release.apk"
           PAYLOAD=$(cat <<EOF
           {
             "version":       "${{ steps.parse.outputs.version }}",
@@ -166,8 +169,7 @@ jobs:
             "apkSha256":     "${{ steps.apk.outputs.sha256 }}",
             "changelog":     null,
             "minRequiredVersion": null,
-            "isForced":      false,
-            "isCurrent":     true
+            "isForced":      false
           }
           EOF
           )
@@ -175,14 +177,15 @@ jobs:
             "$ADMIN_API_URL/api/admin/driver-app/releases" \
             -H "Content-Type: application/json" \
             -H "X-Service-Token: $ADMIN_API_TOKEN" \
-            -d "$PAYLOAD")
+            -d "$PAYLOAD" || echo -e "\n000")
           BODY=$(echo "$HTTP" | head -n -1)
           CODE=$(echo "$HTTP" | tail -n 1)
           echo "HTTP $CODE"
           echo "$BODY"
           if [ "$CODE" != "200" ] && [ "$CODE" != "201" ]; then
-            echo "::error::Регистрация в БД упала — HTTP $CODE" >&2
-            exit 1
+            echo "::warning::Регистрация в БД не прошла (HTTP $CODE). Возможно прод ещё не обновлён до v1.99.25 (нет service-token поддержки). Вставьте URL вручную в /admin/driver-app/releases:"
+            echo "  $APK_URL"
+            exit 0
           fi
           echo "✅ Релиз ${{ steps.parse.outputs.version }} зарегистрирован в канале «${{ steps.parse.outputs.channel }}»"
 
