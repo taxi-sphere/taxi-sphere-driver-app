@@ -147,7 +147,7 @@ export default function LoginScreen() {
               style={styles.serverInput}
               value={serverInput}
               onChangeText={setServerInput}
-              placeholder="http://192.168.1.100:3003"
+              placeholder="https://taxitest.appvault.pro:3001"
               placeholderTextColor="#9ca3af"
               autoCapitalize="none"
               autoCorrect={false}
