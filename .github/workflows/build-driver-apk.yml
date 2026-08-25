@@ -98,8 +98,11 @@ jobs:
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
         run: |
+          # rootProject.projectDir = $repo/android/, поэтому путь идёт от android/
+          # вверх на 1 уровень → в корень репо → в keystore/. На CI (Linux) вложенности
+          # meta-папок нет, ../../ увёл бы в /home/runner/work/{repo}/, где keystore нет.
           cat > keystore.properties <<EOF
-          TAXI_SPHERE_UPLOAD_STORE_FILE=../../keystore/taxi-sphere-driver.keystore
+          TAXI_SPHERE_UPLOAD_STORE_FILE=../keystore/taxi-sphere-driver.keystore
           TAXI_SPHERE_UPLOAD_KEY_ALIAS=${KEY_ALIAS}
           TAXI_SPHERE_UPLOAD_STORE_PASSWORD=${KEY_PASSWORD}
           TAXI_SPHERE_UPLOAD_KEY_PASSWORD=${KEY_PASSWORD}
