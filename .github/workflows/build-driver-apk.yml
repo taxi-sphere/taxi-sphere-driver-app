@@ -28,7 +28,10 @@ jobs:
   build:
     name: Build & publish APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Первая (холодная) сборка занимает ~29 мин на assembleRelease под Fabric+KSP,
+    # после чего remaining шаги (Release, register в БД) не должны упереться в лимит.
+    # Даём запас на случай флаки сети GitHub Release API.
+    timeout-minutes: 60
 
     steps:
       # ── 1. checkout ─────────────────────────────────────────────────────────
