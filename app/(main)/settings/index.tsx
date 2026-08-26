@@ -3,9 +3,18 @@
  * @description:
  *   Экран настроек: звук, вибрация, голосовые оповещения,
  *   выбор навигатора, версия приложения.
- * @dependencies: settings.store
+ *
+ *   v1.5.7: развёрнутый диалог «Проверить обновления» — показывает
+ *   текущую и новую версию, changelog, размер APK, две кнопки
+ *   Отмена / Обновить (последняя сразу запускает downloadAndInstallApk
+ *   без ухода на другой экран). Раньше был минимальный alert без действий.
+ *
+ * @dependencies:
+ *   - settings.store
+ *   - useAppUpdate
+ *   - apk-installer (downloadAndInstallApk)
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-08-26 (v1.5.7 — dialog обновления с 2 кнопками + сравнение версий)
  */
 
 import { useState } from 'react';
@@ -25,6 +34,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useSettingsStore } from '@/stores/settings.store';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
+import { downloadAndInstallApk } from '@/services/apk-installer';
 
 type NavigatorApp = 'yandex' | '2gis' | 'google';
 
@@ -87,9 +97,46 @@ export default function SettingsScreen() {
   const handleCheckNow = async () => {
     await refresh();
     if (hasUpdate && latest) {
-      Alert.alert('Доступна новая версия', `Версия ${latest.latestVersion}`);
+      // v1.5.7: развёрнутый диалог со сравнением версий, changelog'ом и
+      // двумя кнопками. Раньше был минимальный alert без действий —
+      // приходилось закрывать настройки и жать «Обновить» в баннере.
+      const currentVersion = Constants.expoConfig?.version ?? '—';
+      const sizeMb = latest.apkSizeBytes
+        ? Math.round(latest.apkSizeBytes / 1024 / 1024)
+        : null;
+      const parts = [
+        `Текущая версия: ${currentVersion}`,
+        `Новая версия: ${latest.latestVersion}`,
+        sizeMb ? `Размер: ~${sizeMb} МБ` : null,
+        latest.changelog?.trim()
+          ? `\nЧто нового:\n${latest.changelog.trim()}`
+          : null,
+      ].filter(Boolean);
+      Alert.alert('Доступно обновление', parts.join('\n'), [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Обновить',
+          style: 'default',
+          onPress: async () => {
+            // Не блокируем UI: пользователь видит короткий toast
+            // «Скачивание началось...», потом Android покажет системный
+            // installer, либо мы поймаем ошибку и покажем alert.
+            const result = await downloadAndInstallApk(
+              latest.apkUrl,
+              latest.latestVersion,
+            );
+            if (!result.ok) {
+              Alert.alert(
+                'Не удалось обновить',
+                result.error ?? 'Неизвестная ошибка. Попробуйте ещё раз.',
+                [{ text: 'OK' }],
+              );
+            }
+          },
+        },
+      ]);
     } else {
-      Alert.alert('Обновлений нет', 'У вас последняя версия');
+      Alert.alert('Обновлений нет', 'У вас последняя версия', [{ text: 'OK' }]);
     }
   };
 
