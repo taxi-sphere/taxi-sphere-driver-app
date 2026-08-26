@@ -188,7 +188,7 @@ export default function SettingsScreen() {
               style={styles.serverInput}
               value={serverInput}
               onChangeText={setServerInput}
-              placeholder="https://taxitest.appvault.pro:3001"
+              placeholder="https://taxitest1.appvault.pro"
               placeholderTextColor="#9ca3af"
               autoCapitalize="none"
               autoCorrect={false}
