@@ -3,9 +3,19 @@
  * @description:
  *   Боковое меню (drawer) — открывается по кнопке-гамбургеру.
  *   Содержит: аватар+ФИО, Заработок, Профиль, Настройки, Выход.
- * @dependencies: expo-router, auth.store, driver.api
+ *
+ *   v1.5.5: кнопка «Закрыть приложение» переработана:
+ *     • при активном заказе (`on_order`) — Alert-запрет с предложением
+ *       перезагрузить приложение (Updates.reloadAsync). Раньше
+ *       `BackHandler.exitApp()` убивал foreground-service GPS в самый
+ *       неподходящий момент.
+ *     • иначе — «Свернуть»: на Android через `moveTaskToBack` intent
+ *       (Home category), на iOS показываем инструкцию (программное
+ *       сворачивание запрещено Apple).
+ * @dependencies: expo-router, auth.store, driver.api, expo-updates,
+ *                expo-intent-launcher, driver.store
  * @created: 2026-03-18 06:00:00
- * @updated: 2026-03-18 06:00:00
+ * @updated: 2026-08-26 (v1.5.5 — безопасное «Закрыть» + защита при on_order)
  */
 
 import { useEffect, useRef, useMemo } from 'react';
@@ -19,12 +29,18 @@ import {
   Pressable,
   BackHandler,
   PanResponder,
+  Platform,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
+import * as Updates from 'expo-updates';
+import * as IntentLauncher from 'expo-intent-launcher';
 import { getProfile } from '@/api/driver.api';
+import { useDriverStore } from '@/stores/driver.store';
+import { driverLogger } from '@/services/logger.service';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
 
@@ -125,9 +141,71 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
     setTimeout(() => router.push(path as never), 300);
   };
 
+  /**
+   * v1.5.5: безопасное «Закрыть приложение».
+   *   • Активный заказ (on_order) — блокируем закрытие, предлагаем
+   *     перезагрузить приложение (Updates.reloadAsync). Реализация
+   *     завершения заказа остаётся у водителя.
+   *   • Иначе — сворачиваем в фон:
+   *       Android: `IntentLauncher.startActivityAsync` с ACTION_MAIN +
+   *         CATEGORY_HOME — приложение уходит на домашний экран (как по
+   *         кнопке Home). Foreground-сервис GPS продолжает работать.
+   *       iOS: Apple запрещает программное сворачивание. Показываем
+   *         инструкцию — «нажмите Home / свайпните снизу».
+   */
   const handleExitApp = () => {
+    const driverStatus = useDriverStore.getState().status;
+
+    if (driverStatus === 'on_order') {
+      Alert.alert(
+        'Нельзя закрыть на заказе',
+        'У вас активный заказ. Завершите или отмените его, либо перезагрузите приложение (данные заказа сохранятся).',
+        [
+          { text: 'Отмена', style: 'cancel' },
+          {
+            text: 'Перезагрузить',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await Updates.reloadAsync();
+              } catch (e) {
+                void driverLogger.error('Updates.reloadAsync failed', {
+                  screen: 'drawer',
+                  action: 'reload_failed',
+                  message: e instanceof Error ? e.message : String(e),
+                });
+                Alert.alert('Ошибка', 'Не удалось перезагрузить приложение.');
+              }
+            },
+          },
+        ],
+      );
+      return;
+    }
+
     onClose();
-    setTimeout(() => BackHandler.exitApp(), 300);
+
+    if (Platform.OS === 'android') {
+      setTimeout(() => {
+        IntentLauncher.startActivityAsync('android.intent.action.MAIN', {
+          category: 'android.intent.category.HOME',
+          flags: 268435456, // FLAG_ACTIVITY_NEW_TASK — требуется для intent из root activity
+        }).catch((e) => {
+          void driverLogger.error('Home intent failed, fallback to exitApp', {
+            screen: 'drawer',
+            action: 'move_to_back_failed',
+            message: e instanceof Error ? e.message : String(e),
+          });
+          BackHandler.exitApp();
+        });
+      }, 300);
+    } else {
+      Alert.alert(
+        'Как свернуть приложение',
+        'На iOS программное сворачивание запрещено. Нажмите кнопку Home (или свайпните снизу вверх).',
+        [{ text: 'Понятно' }],
+      );
+    }
   };
 
   const fullName = profile
@@ -189,7 +267,7 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
           <View style={styles.separator} />
           <MenuItem
             icon="close-outline"
-            label="Закрыть приложение"
+            label="Свернуть приложение"
             onPress={handleExitApp}
             color="#6b7280"
           />

@@ -103,6 +103,20 @@ class SocketService {
     };
   }
 
+  /**
+   * v1.5.5: подписка на событие «заказ отредактирован диспетчером».
+   * Сервер шлёт `order:updated` с `{ orderId }`, когда диспетчер поменял
+   * адрес/подъезд/комментарий и т.п. без смены статуса. Хуки на клиенте
+   * должны сделать `queryClient.invalidateQueries(['currentOrder', orderId])`,
+   * чтобы отобразить свежие данные без ожидания 30-секундного poll'а.
+   */
+  onOrderUpdated(callback: EventCallback<{ orderId: string }>): () => void {
+    this.socket?.on('order:updated', callback);
+    return () => {
+      this.socket?.off('order:updated', callback);
+    };
+  }
+
   /** Подписка на событие «баланс изменился» */
   onBalanceChanged<T>(callback: EventCallback<T>): () => void {
     this.socket?.on('balance:changed', callback);

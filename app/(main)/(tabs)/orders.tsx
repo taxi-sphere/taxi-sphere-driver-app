@@ -20,6 +20,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
+import { useRouter } from 'expo-router';
 import { useAvailableOrders } from '@/hooks/useAvailableOrders';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
 import { useOrderActions } from '@/hooks/useOrderActions';
@@ -36,6 +37,7 @@ const DEFAULT_ETA_MIN = 5;
 const RETRY_INTERVAL = 15; // секунд
 
 export default function OrdersScreen() {
+  const router = useRouter();
   const { status } = useDriverStatus();
   const { data: orders, isLoading, refetch, meta, error } = useAvailableOrders();
   const { accept } = useOrderActions();
@@ -107,10 +109,18 @@ export default function OrdersScreen() {
       if (!pendingOrder) return;
       accept.mutate(
         { orderId: pendingOrder.id, pickupEtaMin },
-        { onSettled: () => setPendingOrder(null) },
+        {
+          onSuccess: () => {
+            // v1.5.5: сразу открываем экран «Текущий заказ», чтобы водитель
+            // не искал куда идти дальше. Раньше он оставался на «Заказы»
+            // и должен был вручную кликнуть по вкладке.
+            router.replace('/(main)/(tabs)/current');
+          },
+          onSettled: () => setPendingOrder(null),
+        },
       );
     },
-    [accept, pendingOrder],
+    [accept, pendingOrder, router],
   );
 
   const handleDismissModal = useCallback(() => {

@@ -27,26 +27,34 @@ import type { RecentOrder } from '@/types/earnings';
 
 type Period = 'today' | 'week' | 'month';
 
+/**
+ * v1.5.5 fix: раньше отправляли `date.toISOString().slice(0, 10)` →
+ * получали HTTP 400 «Некорректный формат даты (ISO 8601)» от Zod-схемы
+ * с `.datetime()`. И «Сегодня» брал `from = now` — фильтр по completedAt
+ * не покрывал заказы, завершённые в течение сегодняшнего дня раньше момента
+ * открытия экрана. Теперь: полный ISO 8601 datetime, `from` привязан к 00:00
+ * локального дня, `to` — к 23:59:59.999. Backend v1.99.41 поддерживает
+ * оба формата ради обратной совместимости со старой сборкой 1.5.4.
+ */
 function getDateRange(period: Period): { dateFrom: string; dateTo: string } {
   const now = new Date();
-  const dateTo = now.toISOString().slice(0, 10);
 
-  let from: Date;
+  const to = new Date(now);
+  to.setHours(23, 59, 59, 999);
+
+  const from = new Date(now);
+  from.setHours(0, 0, 0, 0);
   switch (period) {
     case 'today':
-      from = now;
       break;
     case 'week':
-      from = new Date(now);
-      from.setDate(from.getDate() - 7);
+      from.setDate(from.getDate() - 6); // включая сегодня — 7 дней
       break;
     case 'month':
-      from = new Date(now);
       from.setMonth(from.getMonth() - 1);
       break;
   }
-  const dateFrom = from.toISOString().slice(0, 10);
-  return { dateFrom, dateTo };
+  return { dateFrom: from.toISOString(), dateTo: to.toISOString() };
 }
 
 const PERIOD_LABELS: Record<Period, string> = {

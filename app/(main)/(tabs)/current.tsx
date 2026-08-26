@@ -4,12 +4,18 @@
  *   Экран текущего заказа — state machine:
  *   Нет заказа → assigned → driver_arrived → in_progress → completed.
  *   Каждое состояние имеет свои действия и UI.
+ *
+ *   v1.5.5: (1) guard `pickupLat/Lng` перед `<OrderMap>` — react-native-maps
+ *   падал на невалидных координатах (undefined/NaN), краш убивал весь экран
+ *   при ручном открытии вкладки. (2) все ошибки логируются через
+ *   driverLogger.error — админ может отсмотреть в карточке водителя
+ *   (/admin/drivers/[id] → Логи).
  * @dependencies: useCurrentOrder, useOrderActions, useDriverStatus
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-08-26 (v1.5.5 — guard OrderMap + логирование)
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, Component, type ReactNode, type ErrorInfo } from 'react';
 import {
   View,
   Text,
@@ -26,6 +32,7 @@ import { useCurrentOrder } from '@/hooks/useCurrentOrder';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
 import { useSettingsStore } from '@/stores/settings.store';
+import { driverLogger } from '@/services/logger.service';
 import {
   formatCurrency,
   formatDistance,
@@ -110,17 +117,70 @@ export default function CurrentOrderScreen() {
     [preferredNavigator],
   );
 
+  /**
+   * v1.5.5: обёртка мутации с логированием ошибок в админку. Раньше при
+   * сетевой ошибке /arrive|/start|/complete водитель видел silent-fail
+   * (react-query показывал error state внутренне, но UI не менялся) —
+   * админ не мог понять, почему заказ «завис».
+   */
+  const runOrderAction = (
+    action: 'arrive' | 'start' | 'complete',
+    orderId: string,
+    fn: () => void,
+  ) => {
+    try {
+      fn();
+    } catch (e) {
+      void driverLogger.error(`Action ${action} threw synchronously`, {
+        screen: 'current',
+        action: `order_${action}_throw`,
+        orderId,
+        message: e instanceof Error ? e.message : String(e),
+        stack: e instanceof Error ? e.stack : null,
+      });
+      Alert.alert('Ошибка', 'Не удалось выполнить действие. Логи отправлены.');
+    }
+  };
+
   const handleArrive = (orderId: string) => {
     Alert.alert('Прибыли?', 'Подтвердите прибытие на точку подачи', [
       { text: 'Отмена', style: 'cancel' },
-      { text: 'Прибыл', onPress: () => arrive.mutate(orderId) },
+      {
+        text: 'Прибыл',
+        onPress: () =>
+          runOrderAction('arrive', orderId, () =>
+            arrive.mutate(orderId, {
+              onError: (err) =>
+                void driverLogger.error('arrive.mutate failed', {
+                  screen: 'current',
+                  action: 'order_arrive_error',
+                  orderId,
+                  message: err instanceof Error ? err.message : String(err),
+                }),
+            }),
+          ),
+      },
     ]);
   };
 
   const handleStart = (orderId: string) => {
     Alert.alert('Начать поездку?', 'Клиент в машине?', [
       { text: 'Отмена', style: 'cancel' },
-      { text: 'Поехали', onPress: () => start.mutate(orderId) },
+      {
+        text: 'Поехали',
+        onPress: () =>
+          runOrderAction('start', orderId, () =>
+            start.mutate(orderId, {
+              onError: (err) =>
+                void driverLogger.error('start.mutate failed', {
+                  screen: 'current',
+                  action: 'order_start_error',
+                  orderId,
+                  message: err instanceof Error ? err.message : String(err),
+                }),
+            }),
+          ),
+      },
     ]);
   };
 
@@ -129,7 +189,21 @@ export default function CurrentOrderScreen() {
       { text: 'Отмена', style: 'cancel' },
       {
         text: 'Завершить',
-        onPress: () => complete.mutate({ orderId }),
+        onPress: () =>
+          runOrderAction('complete', orderId, () =>
+            complete.mutate(
+              { orderId },
+              {
+                onError: (err) =>
+                  void driverLogger.error('complete.mutate failed', {
+                    screen: 'current',
+                    action: 'order_complete_error',
+                    orderId,
+                    message: err instanceof Error ? err.message : String(err),
+                  }),
+              },
+            ),
+          ),
       },
     ]);
   };
@@ -195,8 +269,23 @@ export default function CurrentOrderScreen() {
           <StatusBadge status={order.status} />
         </View>
 
-        {/* Карта заказа */}
-        <OrderMap order={order} height={180} />
+        {/* Карта заказа — guard от невалидных координат.
+            v1.5.5: react-native-maps падает при lat/lng=undefined/NaN,
+            что убивало ВЕСЬ экран (пользователь ловил краш при ручном
+            открытии вкладки «Текущий заказ»). Теперь рендерим карту
+            только когда pickup-координаты валидны — иначе показываем
+            плейсхолдер. */}
+        {Number.isFinite(order.pickupLat) && Number.isFinite(order.pickupLng) ? (
+          <MapErrorBoundary orderId={order.id}>
+            <OrderMap order={order} height={180} />
+          </MapErrorBoundary>
+        ) : (
+          <View style={styles.mapPlaceholder}>
+            <Text style={styles.mapPlaceholderText}>
+              Координаты подачи не заданы — карта недоступна
+            </Text>
+          </View>
+        )}
 
         {/* Информация о клиенте */}
         <View style={styles.clientCard}>
@@ -420,6 +509,50 @@ export default function CurrentOrderScreen() {
 }
 
 /* ─── Вспомогательные компоненты ──────────────────────────────────────── */
+
+/**
+ * v1.5.5: локальный ErrorBoundary для карты заказа. react-native-maps может
+ * упасть на невалидных regions/coords даже несмотря на guard выше (например,
+ * если сама тайл-сервисная конфигурация испортилась). Ловим краш здесь,
+ * логируем в админку через driverLogger — вместо белого экрана.
+ */
+class MapErrorBoundary extends Component<
+  { children: ReactNode; orderId: string },
+  { hasError: boolean }
+> {
+  constructor(props: { children: ReactNode; orderId: string }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    void driverLogger.error('OrderMap crash caught by boundary', {
+      screen: 'current',
+      action: 'order_map_crash',
+      orderId: this.props.orderId,
+      stack: error?.stack ?? null,
+      componentStack: info?.componentStack ?? null,
+    });
+    void driverLogger.flush();
+  }
+
+  render(): ReactNode {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.mapPlaceholder}>
+          <Text style={styles.mapPlaceholderText}>
+            Карту не удалось отобразить. Заказ можно продолжать вести.
+          </Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function StatusBadge({ status }: { status: OrderStatus }) {
   const config: Record<string, { label: string; bg: string; color: string }> = {
@@ -696,6 +829,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6b7280',
     marginTop: 12,
+  },
+
+  // v1.5.5: плейсхолдер карты (когда координаты не заданы или карта упала)
+  mapPlaceholder: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    height: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  mapPlaceholderText: {
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: 'center',
   },
 
   // Actions bar
