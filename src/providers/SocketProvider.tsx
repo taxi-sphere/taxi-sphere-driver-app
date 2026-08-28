@@ -109,10 +109,13 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: ['orders', 'available'] });
       // Local notification если приложение в фоне
       if (AppState.currentState !== 'active') {
-        const d = data as Record<string, unknown> | undefined;
+        // v1.5.9: обращаемся к типизированному полю напрямую. Приведение
+        // `data as Record<string, unknown>` TypeScript отвергал (у
+        // OrderNewEvent нет index-signature), и заодно оно скрывало опечатки
+        // в именах полей.
         void showLocalNotification(
           'Новый заказ',
-          (d?.pickupAddress as string) || 'Доступен новый заказ',
+          data?.pickupAddress || 'Доступен новый заказ',
           { type: 'new_order' },
         );
       }
@@ -129,10 +132,15 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: ['orders', 'current'] });
       void queryClient.invalidateQueries({ queryKey: ['orders', 'available'] });
       if (AppState.currentState !== 'active') {
-        const d = data as Record<string, unknown> | undefined;
+        // v1.5.9: показываем ПРИЧИНУ отмены вместо номера заказа.
+        // Раньше в текст подставлялся `data.orderNumber`, которого в событии
+        // нет: сервер шлёт только `{ orderId, reason }` (orders.service.ts,
+        // emitToDriver 'order:canceled'). Водитель всегда видел
+        // «Заказ # отменён» с пустым номером, а причина — реально полезная —
+        // не показывалась вовсе.
         void showLocalNotification(
           'Заказ отменён',
-          `Заказ #${(d?.orderNumber as string) || ''} отменён`,
+          data?.reason || 'Заказ отменён диспетчером',
           { type: 'order_canceled' },
         );
       }

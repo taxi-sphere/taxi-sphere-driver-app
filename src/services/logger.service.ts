@@ -36,6 +36,13 @@ const MAX_BATCH_SIZE = 50; // сколько отправлять за раз
 
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
+/**
+ * v1.5.9: контекст лога. Известные поля LogEntry + любые дополнительные
+ * (orderId, driverId, детали ошибки) — они попадут в `extra` и доедут
+ * до админки, а не потеряются.
+ */
+export type LogContext = Partial<LogEntry> & Record<string, unknown>;
+
 export interface LogEntry {
   timestamp: string; // ISO
   level: LogLevel;
@@ -86,18 +93,47 @@ class DriverLogger {
   }
 
   /** Основной метод логирования */
-  log(level: LogLevel, message: string, context?: Partial<LogEntry>): void {
+  log(level: LogLevel, message: string, context?: LogContext): void {
+    // v1.5.9: всё, что передали сверх известных полей (orderId, message
+    // конкретной ошибки и т.п.), складываем в `extra`.
+    //
+    // Раньше entry собирался жёстким списком полей, и такие данные молча
+    // терялись: вызовы `driverLogger.error(..., { orderId, message, stack })`
+    // доходили до админки без orderId и без деталей — по логам было не
+    // понять, к какому заказу относится ошибка. TypeScript на это ругался
+    // («orderId does not exist in type Partial<LogEntry>»), но typecheck в
+    // CI водительского приложения не запускается, поэтому ошибка жила.
+    const {
+      stack = null,
+      screen = null,
+      action = null,
+      extra = null,
+      // эти поля вычисляются здесь и из контекста не берутся
+      timestamp: _timestamp,
+      level: _level,
+      message: _contextMessage,
+      appVersion: _appVersion,
+      platform: _platform,
+      deviceInfo: _deviceInfo,
+      ...rest
+    } = context ?? {};
+
+    const mergedExtra: Record<string, unknown> = {
+      ...(extra ?? {}),
+      ...rest,
+    };
+
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
       level,
       message: String(message).slice(0, 2000),
-      stack: context?.stack ?? null,
-      screen: context?.screen ?? null,
-      action: context?.action ?? null,
+      stack: stack ?? null,
+      screen: screen ?? null,
+      action: action ?? null,
       appVersion: Constants.expoConfig?.version ?? null,
       platform: Platform.OS,
       deviceInfo: `${Platform.OS} ${Platform.Version}`,
-      extra: context?.extra ?? null,
+      extra: Object.keys(mergedExtra).length > 0 ? mergedExtra : null,
     };
 
     this.queue.push(entry);
@@ -114,16 +150,16 @@ class DriverLogger {
   }
 
   /** Удобные обёртки */
-  error(message: string, context?: Partial<LogEntry>): void {
+  error(message: string, context?: LogContext): void {
     this.log('error', message, context);
   }
-  warn(message: string, context?: Partial<LogEntry>): void {
+  warn(message: string, context?: LogContext): void {
     this.log('warn', message, context);
   }
-  info(message: string, context?: Partial<LogEntry>): void {
+  info(message: string, context?: LogContext): void {
     this.log('info', message, context);
   }
-  debug(message: string, context?: Partial<LogEntry>): void {
+  debug(message: string, context?: LogContext): void {
     this.log('debug', message, context);
   }
 

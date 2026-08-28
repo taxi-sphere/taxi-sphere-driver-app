@@ -42,8 +42,18 @@ import {
   maskPhone,
 } from '@/lib/utils';
 import { ORDER_COMPLETE_REDIRECT_MS } from '@/lib/constants';
+import {
+  isEmbeddedMapAvailable,
+  EMBEDDED_MAP_UNAVAILABLE_HINT,
+} from '@/lib/map-availability';
 import type { OrderStatus } from '@/types/order';
 import { OrderMap } from '@/components/map/OrderMap';
+
+/**
+ * v1.5.9: считается один раз на модуль — значение зависит только от
+ * конфигурации сборки и в рантайме не меняется.
+ */
+const mapAvailable = isEmbeddedMapAvailable();
 
 export default function CurrentOrderScreen() {
   const router = useRouter();
@@ -269,21 +279,41 @@ export default function CurrentOrderScreen() {
           <StatusBadge status={order.status} />
         </View>
 
-        {/* Карта заказа — guard от невалидных координат.
-            v1.5.5: react-native-maps падает при lat/lng=undefined/NaN,
-            что убивало ВЕСЬ экран (пользователь ловил краш при ручном
-            открытии вкладки «Текущий заказ»). Теперь рендерим карту
-            только когда pickup-координаты валидны — иначе показываем
-            плейсхолдер. */}
-        {Number.isFinite(order.pickupLat) && Number.isFinite(order.pickupLng) ? (
+        {/* Карта заказа — два независимых условия, оба обязательны.
+
+            1) v1.5.5: guard от невалидных координат — react-native-maps
+               падает при lat/lng = undefined/NaN.
+            2) v1.5.9: guard от ОТСУТСТВИЯ ключа Google Maps. Без ключа
+               нативный слой карты не инициализируется и роняет ВСЁ
+               приложение: такой краш не ловится ни ErrorBoundary (он
+               перехватывает только JS-исключения), ни try/catch. Поэтому
+               MapView не монтируется вовсе — см. src/lib/map-availability.ts.
+
+            Маршрут при этом строится во внешнем навигаторе (кнопка ниже),
+            он работает без ключей — заказ ведётся полноценно. */}
+        {mapAvailable &&
+        Number.isFinite(order.pickupLat) &&
+        Number.isFinite(order.pickupLng) ? (
           <MapErrorBoundary orderId={order.id}>
             <OrderMap order={order} height={180} />
           </MapErrorBoundary>
         ) : (
           <View style={styles.mapPlaceholder}>
             <Text style={styles.mapPlaceholderText}>
-              Координаты подачи не заданы — карта недоступна
+              {!mapAvailable
+                ? EMBEDDED_MAP_UNAVAILABLE_HINT
+                : 'Координаты подачи не заданы — карта недоступна'}
             </Text>
+            {Number.isFinite(order.pickupLat) && Number.isFinite(order.pickupLng) && (
+              <TouchableOpacity
+                style={styles.mapPlaceholderButton}
+                onPress={() => openNavigator(order.pickupLat!, order.pickupLng!)}
+              >
+                <Text style={styles.mapPlaceholderButtonText}>
+                  Открыть в навигаторе
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -835,15 +865,32 @@ const styles = StyleSheet.create({
   mapPlaceholder: {
     backgroundColor: '#f3f4f6',
     borderRadius: 12,
-    height: 100,
+    // v1.5.9: было фиксированное height: 100 — кнопка «Открыть в навигаторе»
+    // в него не помещалась и обрезалась.
+    minHeight: 100,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 16,
+    paddingVertical: 16,
   },
   mapPlaceholderText: {
     fontSize: 12,
     color: '#6b7280',
     textAlign: 'center',
+  },
+  // v1.5.9: кнопка внешнего навигатора прямо в плейсхолдере — когда
+  // встроенной карты нет, маршрут строится здесь.
+  mapPlaceholderButton: {
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#4f46e5',
+  },
+  mapPlaceholderButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#ffffff',
   },
 
   // Actions bar

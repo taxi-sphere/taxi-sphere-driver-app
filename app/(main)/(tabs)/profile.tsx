@@ -27,7 +27,7 @@ import { getProfile } from '@/api/driver.api';
 import { useLogout } from '@/hooks/useAuth';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
 import { formatCurrency } from '@/lib/utils';
-import { useTheme } from '@/lib/theme';
+import { useTheme, type ThemeColors } from '@/lib/theme';
 import { FadeIn, ScalePress } from '@/components/ui';
 
 export default function ProfileScreen() {
@@ -187,7 +187,9 @@ function InfoRow({ label, value, valueColor, colors }: {
   label: string;
   value: string;
   valueColor?: string;
-  colors: Record<string, string>;
+  // v1.5.9: было Record<string, string> — ThemeColors это интерфейс без
+  // index-signature, поэтому TypeScript отвергал передачу colors.
+  colors: ThemeColors;
 }) {
   return (
     <View style={styles.infoRow}>
