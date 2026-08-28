@@ -3,9 +3,21 @@
  * @description:
  *   Экран входа: телефон + пароль.
  *   Единственный экран авторизации для водительского приложения.
- * @dependencies: useAuth, expo-router
+ *
+ *   v1.5.12: номер нормализуется перед отправкой. Бэкенд ищет пользователя
+ *   ТОЧНЫМ совпадением строки (`where: { phone }` в /api/v1/auth/login, без
+ *   нормализации на своей стороне), а его zod-схема пропускает и
+ *   «79230189196» — то есть запрос уходит и возвращается «Неверный номер или
+ *   пароль» при верном пароле. Свои же десять цифр отсекались ещё раньше,
+ *   на клиенте, проверкой длины. Теперь принимается любой из привычных
+ *   вариантов (10 цифр, через 8, через +7, вставка из контактов), а на сервер
+ *   всегда уходит «+7XXXXXXXXXX».
+ *
+ *   Форматирование по мере ввода сознательно НЕ делается — см. комментарий
+ *   у самого поля.
+ * @dependencies: useAuth, expo-router, @/lib/utils
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-13 14:00:00
+ * @updated: 2026-08-28 (v1.5.12)
  */
 
 import { useState } from 'react';
@@ -25,10 +37,11 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useLogin } from '@/hooks/useAuth';
 import { useSettingsStore } from '@/stores/settings.store';
+import { formatPhoneInput, isPhoneComplete, normalizePhone } from '@/lib/utils';
 
 export default function LoginScreen() {
   const { serverUrl, setServerUrl, lastPhone } = useSettingsStore();
-  const [phone, setPhone] = useState(lastPhone || '+7');
+  const [phone, setPhone] = useState(() => formatPhoneInput(lastPhone));
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showServerSettings, setShowServerSettings] = useState(false);
@@ -36,9 +49,11 @@ export default function LoginScreen() {
   const [serverInput, setServerInput] = useState(serverUrl);
 
   const handleLogin = () => {
-    const cleaned = phone.replace(/\s/g, '');
-    if (cleaned.length < 11) {
-      Alert.alert('Ошибка', 'Введите корректный номер телефона');
+    if (!isPhoneComplete(phone)) {
+      Alert.alert(
+        'Проверьте номер',
+        'Нужны все 10 цифр номера после +7. Например: +7 923 018 91 96',
+      );
       return;
     }
     if (!password.trim()) {
@@ -47,7 +62,7 @@ export default function LoginScreen() {
     }
 
     login.mutate(
-      { phone: cleaned, password },
+      { phone: normalizePhone(phone), password },
       {
         onError: (err) => {
           const message =
@@ -78,6 +93,15 @@ export default function LoginScreen() {
           <TextInput
             style={styles.input}
             value={phone}
+            // Во время набора значение НЕ переформатируется.
+            //
+            // Пробовали маску (v1.5.12, проверено на эмуляторе): контролируемое
+            // поле на Android не переносит курсор в конец при смене value —
+            // он остаётся на прежнем смещении, и каждый следующий символ
+            // вставляется в середину. Набор «9 2 3 0 1» с паузами по две
+            // секунды давал «+7 013 279 79 6». Группировка цифр — косметика,
+            // а ломала она главное, поэтому её здесь нет: поле ведёт себя
+            // нативно, а номер приводится к единому виду при отправке.
             onChangeText={setPhone}
             placeholder="+7 900 000 00 00"
             keyboardType="phone-pad"

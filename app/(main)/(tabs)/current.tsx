@@ -15,7 +15,7 @@
  * @updated: 2026-08-26 (v1.5.5 — guard OrderMap + логирование)
  */
 
-import { useState, useEffect, useRef, useCallback, Component, type ReactNode, type ErrorInfo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, Component, type ReactNode, type ErrorInfo } from 'react';
 import {
   View,
   Text,
@@ -40,6 +40,8 @@ import {
   formatTime,
   formatTimer,
   maskPhone,
+  splitAddressEntrance,
+  stripSharedCityPrefix,
 } from '@/lib/utils';
 import { ORDER_COMPLETE_REDIRECT_MS } from '@/lib/constants';
 import {
@@ -54,6 +56,44 @@ import { OrderMap } from '@/components/map/OrderMap';
  * конфигурации сборки и в рантайме не меняется.
  */
 const mapAvailable = isEmbeddedMapAvailable();
+
+/**
+ * Точка маршрута: подпись, адрес и подъезд.
+ *
+ * v1.5.12: подъезд выводится РОВНО ОДИН раз. Диспетчер выбирает подсказку, в
+ * которой подъезд уже входит в строку адреса («Бортникова, д. 48 подъезд 1»),
+ * и одновременно заполняется отдельное поле `pickupEntrance` — экран честно
+ * рисовал оба, и водитель читал подъезд дважды подряд. `splitAddressEntrance`
+ * вырезает дубль из адреса, а сам подъезд показывается чипом: подъехав к
+ * дому, водитель ищет глазами именно его, и мельче основного текста он быть
+ * не должен.
+ */
+function AddressLines({
+  label,
+  address,
+  entrance,
+  note,
+}: {
+  label: string;
+  address: string;
+  entrance: string | null;
+  note: string | null;
+}) {
+  const point = splitAddressEntrance(address, entrance);
+
+  return (
+    <View style={styles.addressContent}>
+      <Text style={styles.addressLabel}>{label}</Text>
+      <Text style={styles.addressText}>{point.address}</Text>
+      {point.entrance && (
+        <View style={styles.entranceChip}>
+          <Text style={styles.entranceChipText}>Подъезд {point.entrance}</Text>
+        </View>
+      )}
+      {note && <Text style={styles.addressNote}>{note}</Text>}
+    </View>
+  );
+}
 
 export default function CurrentOrderScreen() {
   const router = useRouter();
@@ -70,6 +110,26 @@ export default function CurrentOrderScreen() {
   const [redirectCountdown, setRedirectCountdown] = useState<number | null>(
     null,
   );
+
+  /**
+   * v1.5.12: адреса точек с общим городом, снятым сразу у всех.
+   * Считается по самим данным: если первый сегмент одинаков у всех точек
+   * заказа — он избыточен. Разные города остаются на месте, это сигнал
+   * «выезд за город». Порядок совпадает с порядком отрисовки ниже.
+   */
+  const shortAddresses = useMemo(() => {
+    const raw = [
+      order?.pickupAddress ?? '',
+      ...(order?.stops ?? []).map((s) => s.address),
+      order?.dropoffAddress ?? '',
+    ];
+    const short = stripSharedCityPrefix(raw);
+    return {
+      pickup: short[0] ?? '',
+      stops: short.slice(1, short.length - 1),
+      dropoff: short[short.length - 1] ?? '',
+    };
+  }, [order]);
 
   // Управление таймером ожидания
   useEffect(() => {
@@ -339,18 +399,12 @@ export default function CurrentOrderScreen() {
         <View style={styles.addressesCard}>
           <View style={styles.addressRow}>
             <View style={[styles.dot, styles.dotGreen]} />
-            <View style={styles.addressContent}>
-              <Text style={styles.addressLabel}>Подача</Text>
-              <Text style={styles.addressText}>{order.pickupAddress}</Text>
-              {order.pickupEntrance && (
-                <Text style={styles.addressNote}>
-                  Подъезд: {order.pickupEntrance}
-                </Text>
-              )}
-              {order.pickupNote && (
-                <Text style={styles.addressNote}>{order.pickupNote}</Text>
-              )}
-            </View>
+            <AddressLines
+              label="Подача"
+              address={shortAddresses.pickup || order.pickupAddress}
+              entrance={order.pickupEntrance}
+              note={order.pickupNote}
+            />
             {order.pickupLat != null &&
               order.pickupLng != null &&
               order.status === 'assigned' && (
@@ -369,18 +423,12 @@ export default function CurrentOrderScreen() {
           {(order.stops ?? []).map((stop, idx) => (
             <View key={idx} style={styles.addressRow}>
               <View style={[styles.dot, styles.dotYellow]} />
-              <View style={styles.addressContent}>
-                <Text style={styles.addressLabel}>Остановка {idx + 1}</Text>
-                <Text style={styles.addressText}>{stop.address}</Text>
-                {stop.entrance && (
-                  <Text style={styles.addressNote}>
-                    Подъезд: {stop.entrance}
-                  </Text>
-                )}
-                {stop.note && (
-                  <Text style={styles.addressNote}>{stop.note}</Text>
-                )}
-              </View>
+              <AddressLines
+                label={`Остановка ${idx + 1}`}
+                address={shortAddresses.stops[idx] ?? stop.address}
+                entrance={stop.entrance}
+                note={stop.note}
+              />
               {stop.lat != null &&
                 stop.lng != null &&
                 order.status === 'in_progress' && (
@@ -397,18 +445,12 @@ export default function CurrentOrderScreen() {
           {order.dropoffAddress && (
             <View style={styles.addressRow}>
               <View style={[styles.dot, styles.dotRed]} />
-              <View style={styles.addressContent}>
-                <Text style={styles.addressLabel}>Высадка</Text>
-                <Text style={styles.addressText}>{order.dropoffAddress}</Text>
-                {order.dropoffEntrance && (
-                  <Text style={styles.addressNote}>
-                    Подъезд: {order.dropoffEntrance}
-                  </Text>
-                )}
-                {order.dropoffNote && (
-                  <Text style={styles.addressNote}>{order.dropoffNote}</Text>
-                )}
-              </View>
+              <AddressLines
+                label="Высадка"
+                address={shortAddresses.dropoff || order.dropoffAddress}
+                entrance={order.dropoffEntrance}
+                note={order.dropoffNote}
+              />
               {order.dropoffLat != null &&
                 order.dropoffLng != null &&
                 order.status === 'in_progress' && (
@@ -756,6 +798,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6b7280',
     marginTop: 2,
+  },
+  // Подъезд — то, что водитель ищет глазами у подъехавшего дома, поэтому он
+  // выделен чипом, а не набран заметкой мельче основного текста.
+  entranceChip: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: '#eef2ff',
+  },
+  entranceChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4338ca',
   },
   navButton: {
     backgroundColor: '#4f46e5',

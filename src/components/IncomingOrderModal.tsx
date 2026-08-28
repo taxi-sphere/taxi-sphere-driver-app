@@ -9,21 +9,31 @@
  *   - 'offer':   заказ пришёл от сервера (таймер из пропа `timerSec`).
  *
  *   Особенности:
- *   - Селектор времени подачи (пресеты 3/5/7/10/15 + кнопки ±1).
+ *   - Селектор времени подачи: пресеты под рекомендацию сервера, шаг
+ *     соразмерный значению, удержание кнопок для быстрого набора и ручной
+ *     ввод по тапу на число (v1.5.12).
  *   - Круговой таймер по периметру кнопки «Принять» (react-native-svg).
  *   - Пульсирующее кольцо вокруг кнопки (Animated).
  *   - Авто-закрытие по таймауту.
  *
+ *   Адреса (v1.5.12): показываются в две строки, общий для всех точек заказа
+ *   город снимается, подъезд выносится отдельным чипом — на ширине 320 px
+ *   однострочный адрес обрезался ровно на доме и подъезде, то есть на том,
+ *   ради чего водитель в него и смотрит.
+ *
  * @dependencies:
  *   - react-native-svg
  *   - @/types/order
+ *   - @/lib/utils (splitAddressEntrance, stripSharedCityPrefix,
+ *     pickupEtaStep, pickupEtaPresets)
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   View,
   Text,
+  TextInput,
   TouchableOpacity,
   StyleSheet,
   Pressable,
@@ -34,6 +44,11 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import type { AvailableOrder } from '@/types/order';
+import {
+  pickupEtaPresets,
+  pickupEtaStep,
+  stripSharedCityPrefix,
+} from '@/lib/utils';
 
 /** Режим модалки */
 export type IncomingOrderMode = 'confirm' | 'offer';
@@ -56,7 +71,15 @@ export interface IncomingOrderModalProps {
 
 const MIN_ETA = 1;
 const MAX_ETA = 1440;
-const PRESETS: number[] = [3, 5, 7, 10, 15];
+
+/** Пауза перед автоповтором — чтобы обычный тап не превращался в разгон. */
+const HOLD_START_DELAY_MS = 400;
+/** Первый интервал автоповтора после срабатывания удержания. */
+const HOLD_FIRST_INTERVAL_MS = 260;
+/** Во сколько раз укорачивается интервал на каждом шаге удержания. */
+const HOLD_ACCELERATION = 0.75;
+/** Быстрее этого не разгоняемся — иначе значение не поймать глазом. */
+const HOLD_MIN_INTERVAL_MS = 60;
 
 /* -------------------------------------------------------------------------- */
 /*  Круговой таймер                                                            */
@@ -114,13 +137,97 @@ function CircularTimer({
 function EtaSelector({
   value,
   onChange,
+  presets,
   disabled,
 }: {
   value: number;
   onChange: (v: number) => void;
+  /** Набор быстрых значений — считается от рекомендации сервера. */
+  presets: number[];
   disabled?: boolean;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  /** Активный автоповтор удержания. */
+  const repeatRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Текущее значение для колбэков автоповтора. Через ref, а не через
+   * замыкание: пересоздавать таймер на каждое изменение значения означало бы
+   * терять разгон на каждом шаге.
+   */
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
   const clamp = (v: number) => Math.max(MIN_ETA, Math.min(MAX_ETA, v));
+
+  const stopRepeat = useCallback(() => {
+    if (repeatRef.current) {
+      clearTimeout(repeatRef.current);
+      repeatRef.current = null;
+    }
+  }, []);
+
+  // Гасим автоповтор при размонтировании: иначе таймер продолжает тикать
+  // после закрытия модалки и дёргает состояние мёртвого компонента.
+  useEffect(() => stopRepeat, [stopRepeat]);
+
+  /** Один шаг. Возвращает false, если упёрлись в границу диапазона. */
+  const stepOnce = useCallback(
+    (direction: 1 | -1): boolean => {
+      const current = valueRef.current;
+      const next = clamp(current + direction * pickupEtaStep(current));
+      if (next === current) return false;
+      onChange(next);
+      return true;
+    },
+    [onChange],
+  );
+
+  /**
+   * Нажатие: сразу один шаг, затем — если палец удерживают — автоповтор с
+   * ускорением. От 5 минут до часа доезжает примерно за секунду вместо
+   * 55 отдельных нажатий.
+   */
+  const startRepeat = useCallback(
+    (direction: 1 | -1) => {
+      stopRepeat();
+      stepOnce(direction);
+
+      let interval = HOLD_FIRST_INTERVAL_MS;
+      const tick = () => {
+        if (!stepOnce(direction)) {
+          stopRepeat();
+          return;
+        }
+        interval = Math.max(HOLD_MIN_INTERVAL_MS, interval * HOLD_ACCELERATION);
+        repeatRef.current = setTimeout(tick, interval);
+      };
+
+      repeatRef.current = setTimeout(tick, HOLD_START_DELAY_MS);
+    },
+    [stepOnce, stopRepeat],
+  );
+
+  const beginEdit = useCallback(() => {
+    if (disabled) return;
+    stopRepeat();
+    setDraft(String(valueRef.current));
+    setEditing(true);
+  }, [disabled, stopRepeat]);
+
+  /**
+   * Пустой или неразобранный ввод не показывает ошибку, а молча возвращает
+   * прежнее значение: водитель под таймером, диалог с ошибкой здесь только
+   * отнимет время.
+   */
+  const commitEdit = useCallback(() => {
+    const parsed = Number.parseInt(draft.replace(/\D/g, ''), 10);
+    if (Number.isFinite(parsed) && parsed > 0) onChange(clamp(parsed));
+    setEditing(false);
+  }, [draft, onChange]);
+
+  const step = pickupEtaStep(value);
 
   return (
     <View style={etaStyles.wrap}>
@@ -129,26 +236,53 @@ function EtaSelector({
       <View style={etaStyles.stepper}>
         <TouchableOpacity
           accessibilityRole="button"
-          accessibilityLabel="Уменьшить на 1 минуту"
+          accessibilityLabel={`Уменьшить на ${step} мин, удержание — быстрее`}
           style={[etaStyles.stepBtn, disabled && etaStyles.stepBtnDisabled]}
-          onPress={() => onChange(clamp(value - 1))}
-          disabled={disabled || value <= MIN_ETA}
+          onPressIn={() => startRepeat(-1)}
+          onPressOut={stopRepeat}
+          disabled={disabled || editing || value <= MIN_ETA}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <Ionicons name="remove" size={24} color="#ffffff" />
         </TouchableOpacity>
 
-        <View style={etaStyles.valueBox}>
-          <Text style={etaStyles.valueText}>{value}</Text>
-          <Text style={etaStyles.valueUnit}>мин</Text>
-        </View>
+        {editing ? (
+          <View style={etaStyles.valueBox}>
+            <TextInput
+              style={etaStyles.valueInput}
+              value={draft}
+              onChangeText={(text) => setDraft(text.replace(/\D/g, '').slice(0, 4))}
+              keyboardType="number-pad"
+              returnKeyType="done"
+              maxLength={4}
+              autoFocus
+              selectTextOnFocus
+              onBlur={commitEdit}
+              onSubmitEditing={commitEdit}
+              accessibilityLabel="Время подачи в минутах"
+            />
+            <Text style={etaStyles.valueUnit}>мин</Text>
+          </View>
+        ) : (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`Время подачи ${value} мин. Нажмите, чтобы ввести вручную`}
+            style={etaStyles.valueBox}
+            onPress={beginEdit}
+            disabled={disabled}
+          >
+            <Text style={etaStyles.valueText}>{value}</Text>
+            <Text style={etaStyles.valueUnit}>мин</Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity
           accessibilityRole="button"
-          accessibilityLabel="Увеличить на 1 минуту"
+          accessibilityLabel={`Увеличить на ${step} мин, удержание — быстрее`}
           style={[etaStyles.stepBtn, disabled && etaStyles.stepBtnDisabled]}
-          onPress={() => onChange(clamp(value + 1))}
-          disabled={disabled || value >= MAX_ETA}
+          onPressIn={() => startRepeat(1)}
+          onPressOut={stopRepeat}
+          disabled={disabled || editing || value >= MAX_ETA}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <Ionicons name="add" size={24} color="#ffffff" />
@@ -156,7 +290,7 @@ function EtaSelector({
       </View>
 
       <View style={etaStyles.presets}>
-        {PRESETS.map((p) => (
+        {presets.map((p) => (
           <TouchableOpacity
             key={p}
             accessibilityRole="button"
@@ -198,6 +332,34 @@ export function IncomingOrderModal({
   const [etaMin, setEtaMin] = useState<number>(initialEtaMin ?? 5);
   const [remaining, setRemaining] = useState<number>(timerSec);
   const pulse = useRef(new Animated.Value(0)).current;
+
+  /**
+   * Пресеты считаются от РЕКОМЕНДАЦИИ сервера, а не от текущего значения:
+   * иначе набор кнопок менялся бы под пальцем, пока водитель крутит стрелки.
+   */
+  const presets = useMemo(
+    () => pickupEtaPresets(initialEtaMin ?? 5),
+    [initialEtaMin],
+  );
+
+  /**
+   * Адреса заказа с одним общим городом, снятым у всех точек сразу.
+   * Порядок: подача, промежуточные остановки, назначение — тот же, в котором
+   * они и рисуются ниже.
+   */
+  const addresses = useMemo(() => {
+    const raw = [
+      order?.pickupAddress ?? '',
+      ...(order?.stops ?? []).map((s) => s.address),
+      order?.dropoffAddress ?? '',
+    ];
+    const short = stripSharedCityPrefix(raw);
+    return {
+      pickup: short[0] ?? '',
+      stops: short.slice(1, short.length - 1),
+      dropoff: short[short.length - 1] ?? '',
+    };
+  }, [order]);
 
   // Сброс состояния при каждом открытии
   useEffect(() => {
@@ -330,25 +492,27 @@ export function IncomingOrderModal({
                   {etaLoading ? (
                     <ActivityIndicator size="small" color="#137fec" />
                   ) : (
-                    <Text style={styles.routeEta}>~{etaMin} мин</Text>
+                    // «подача» в подписи обязательна: рядом с адресом голое
+                    // «~N мин» читается как время поездки, а это время подачи.
+                    <Text style={styles.routeEta}>подача ~{etaMin} мин</Text>
                   )}
                 </View>
-                <Text style={styles.routeAddress} numberOfLines={1}>
-                  {order.pickupAddress}
+                <Text style={styles.routeAddress} numberOfLines={2}>
+                  {addresses.pickup}
                 </Text>
               </View>
               {(order.stops ?? []).map((stop, i) => (
                 <View key={i}>
                   <Text style={styles.routeLabel}>ОСТАНОВКА {i + 1}</Text>
-                  <Text style={styles.routeAddressStop} numberOfLines={1}>
-                    {stop.address}
+                  <Text style={styles.routeAddressStop} numberOfLines={2}>
+                    {addresses.stops[i] ?? stop.address}
                   </Text>
                 </View>
               ))}
               <View>
                 <Text style={styles.routeLabel}>КУДА</Text>
-                <Text style={styles.routeAddress} numberOfLines={1}>
-                  {order.dropoffAddress ?? 'По городу'}
+                <Text style={styles.routeAddress} numberOfLines={2}>
+                  {addresses.dropoff || 'По городу'}
                 </Text>
               </View>
             </View>
@@ -378,6 +542,7 @@ export function IncomingOrderModal({
           <EtaSelector
             value={etaMin}
             onChange={setEtaMin}
+            presets={presets}
             disabled={accepting || etaLoading}
           />
 
@@ -717,6 +882,18 @@ const etaStyles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 32,
     fontWeight: '800',
+  },
+  // Поле ручного ввода держит те же метрики, что и текст значения, — иначе
+  // при тапе стоящий рядом блок пресетов подпрыгивает.
+  valueInput: {
+    color: '#ffffff',
+    fontSize: 32,
+    fontWeight: '800',
+    minWidth: 56,
+    paddingVertical: 0,
+    textAlign: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: '#137fec',
   },
   valueUnit: {
     color: '#92adc9',
