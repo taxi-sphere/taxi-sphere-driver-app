@@ -6,10 +6,8 @@
  *   ЗАЧЕМ (v1.5.9): `react-native-maps` с PROVIDER_GOOGLE не может
  *   инициализироваться без ключа Google Maps, и падает НАТИВНО — такой краш
  *   не ловится ни try/catch, ни React ErrorBoundary, приложение просто
- *   закрывается. Так и происходило при открытии вкладки «Текущий»: ключ в
- *   проекте не задан (в app.json нет `android.config.googleMaps.apiKey`,
- *   в манифесте APK нет `com.google.android.geo.API_KEY`), а карта —
- *   единственное место, где он нужен.
+ *   закрывается. Так и происходило при открытии вкладки «Текущий»: ключа в
+ *   сборке не было, а карта — единственное место, где он нужен.
  *
  *   Единственный надёжный способ пережить отсутствие ключа — НЕ РЕНДЕРИТЬ
  *   MapView вовсе. Поэтому наличие ключа проверяется здесь, до монтирования
@@ -21,39 +19,48 @@
  *   карты приложение остаётся полностью рабочим: адрес, клиент, кнопки
  *   статусов и навигация на месте.
  *
- *   Ключ читается из конфигурации сборки (expo-constants), а не из настроек
- *   на сервере, потому что нативный слой Google Maps забирает его из
- *   AndroidManifest при инициализации — подменить в рантайме невозможно.
- *   Как только ключ пропишут в app.json и пересоберут APK, карта включится
- *   сама, без правок кода.
+ *   ── Почему проверяется флаг, а не сам ключ (исправлено в v1.5.11) ─────────
+ *   До v1.5.11 здесь читался `expoConfig.android.config.googleMaps.apiKey`.
+ *   Это не работает НИ ПРИ КАКОМ ключе: expo-constants вшивает в APK
+ *   ПУБЛИЧНЫЙ конфиг (`getConfig(..., { isPublicConfig: true })`), а тот
+ *   вырезает `android.config` и `ios.config` — ровно потому, что там лежат
+ *   ключи. Проверено на этом проекте: `expo config --type public` отдаёт
+ *   android без поля `config`, `--type prebuild` — с ним. Дефект был латентным
+ *   ровно до момента, когда ключ появился: проверка вернула бы false, и карта
+ *   осталась бы скрытой при полностью рабочей сборке.
  *
- * @dependencies: expo-constants
+ *   Поэтому app.config.js кладёт рядом с ключом публичный булев признак
+ *   `extra.embeddedMapAvailable`, и спрашиваем мы его. Сам ключ в рантайме
+ *   не нужен: нативный слой Google Maps берёт его из AndroidManifest.
+ *
+ * @dependencies: expo-constants, app.config.js
  * @created: 2026-08-28 (v1.5.9)
+ * @updated: 2026-08-28 (v1.5.11)
  */
 
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-function nonEmpty(value: unknown): boolean {
-  return typeof value === 'string' && value.trim().length > 0;
+/** Форма флага, который выставляет app.config.js при наличии ключа. */
+interface EmbeddedMapFlag {
+  android?: boolean;
+  ios?: boolean;
 }
 
 /**
- * Есть ли в сборке ключ Google Maps для текущей платформы.
- *
- * Android: `expo.android.config.googleMaps.apiKey`
- * iOS:     `expo.ios.config.googleMapsApiKey`
+ * Есть ли в сборке ключ карт для текущей платформы.
+ * Источник — `expo.extra.embeddedMapAvailable`, см. app.config.js.
  */
 export function isEmbeddedMapAvailable(): boolean {
-  const cfg = Constants.expoConfig;
-  if (!cfg) return false;
+  const extra = Constants.expoConfig?.extra as
+    | { embeddedMapAvailable?: EmbeddedMapFlag }
+    | undefined;
 
-  if (Platform.OS === 'android') {
-    return nonEmpty(cfg.android?.config?.googleMaps?.apiKey);
-  }
-  if (Platform.OS === 'ios') {
-    return nonEmpty(cfg.ios?.config?.googleMapsApiKey);
-  }
+  const flag = extra?.embeddedMapAvailable;
+  if (!flag) return false;
+
+  if (Platform.OS === 'android') return flag.android === true;
+  if (Platform.OS === 'ios') return flag.ios === true;
   return false;
 }
 

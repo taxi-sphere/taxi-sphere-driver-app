@@ -9,14 +9,21 @@
  *
  *   Работает только на Android (APK-installer нельзя вызвать на iOS —
  *   iOS-приложения обновляются только через App Store).
+ *   v1.5.11: скачивание может быть запущено и из Настроек — они кладут релиз
+ *   в update-request.store, а весь процесс и его UI остаются здесь, в одном
+ *   владельце загрузки.
  * @dependencies:
  *   - @/hooks/useAppUpdate
+ *   - @/stores/update-request.store
+ *   - @/api/app.api (тип DriverAppLatestPublicDTO)
  *   - @/services/apk-installer
  *   - expo-file-system, expo-intent-launcher (для installer)
+ *   - react-native-safe-area-context (отступ баннера под статус-бар)
  * @created: 2026-08-24
+ * @updated: 2026-08-28 (v1.5.11)
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -30,6 +37,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
+import { useUpdateRequestStore } from '@/stores/update-request.store';
+import type { DriverAppLatestPublicDTO } from '@/api/app.api';
 import { downloadAndInstallApk, type DownloadProgress } from '@/services/apk-installer';
 
 // ─── Хелперы ─────────────────────────────────────────────────────────────────
@@ -48,15 +57,23 @@ export function AppUpdateNotifier() {
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const handleUpdate = useCallback(async () => {
-    if (!latest) return;
+  /**
+   * Релиз, который скачивается прямо сейчас. Отдельно от `latest`, потому что
+   * скачивание может быть запущено из Настроек — а у них своя копия
+   * `useAppUpdate` (состояние в локальном useState, не общее). Модалка
+   * прогресса должна показывать ту версию, которую реально качает.
+   */
+  const [activeRelease, setActiveRelease] = useState<DriverAppLatestPublicDTO | null>(null);
+
+  const handleUpdate = useCallback(async (release: DriverAppLatestPublicDTO) => {
+    setActiveRelease(release);
     setDownloading(true);
     setError(null);
-    setProgress({ bytesReceived: 0, bytesTotal: latest.apkSizeBytes, percent: 0 });
+    setProgress({ bytesReceived: 0, bytesTotal: release.apkSizeBytes, percent: 0 });
 
     const result = await downloadAndInstallApk(
-      latest.apkUrl,
-      latest.latestVersion,
+      release.apkUrl,
+      release.latestVersion,
       (p) => setProgress(p),
     );
 
@@ -68,13 +85,31 @@ export function AppUpdateNotifier() {
     }
     // При успехе управление перехватила система (installer),
     // после установки Android перезапустит приложение сам.
-  }, [latest]);
+  }, []);
+
+  // v1.5.11: запуск скачивания из Настроек. Настройки кладут в стор РЕЛИЗ
+  // (не флаг), а весь процесс — включая модалку с прогрессом — ведётся здесь,
+  // чтобы не копировать загрузку и её UI во второй экран.
+  const requestedRelease = useUpdateRequestStore((s) => s.requested);
+  const clearUpdateRequest = useUpdateRequestStore((s) => s.clear);
+
+  useEffect(() => {
+    if (!requestedRelease) return;
+    // Запрос гасим всегда, иначе после окончания текущей загрузки эффект
+    // перезапустится на том же значении и скачает второй раз.
+    clearUpdateRequest();
+    if (downloading) return;
+    void handleUpdate(requestedRelease);
+  }, [requestedRelease, clearUpdateRequest, downloading, handleUpdate]);
 
   // На iOS ничего не показываем — там обновления только через App Store
   if (Platform.OS !== 'android') return null;
-  if (!hasUpdate || !latest) return null;
 
   // ── Процесс скачивания (перекрывает всё) ──────────────────────────────
+  // Проверяется ДО hasUpdate намеренно: скачивание могли запустить из
+  // Настроек, а у них своя копия useAppUpdate — здесь `latest` в этот момент
+  // может быть ещё пустым, и при обратном порядке модалка прогресса просто не
+  // отрисовалась бы (водитель жмёт «Обновить» и не видит ничего).
   if (downloading || error) {
     return (
       <Modal transparent animationType="fade" statusBarTranslucent>
@@ -101,7 +136,8 @@ export function AppUpdateNotifier() {
               <>
                 <Text style={styles.modalTitle}>Скачивание обновления</Text>
                 <Text style={styles.modalText}>
-                  Версия {latest.latestVersion} · {formatMb(latest.apkSizeBytes)}
+                  Версия {activeRelease?.latestVersion ?? ''} ·{' '}
+                  {formatMb(activeRelease?.apkSizeBytes ?? 0)}
                 </Text>
                 <View style={styles.progressBar}>
                   <View
@@ -134,6 +170,9 @@ export function AppUpdateNotifier() {
     );
   }
 
+  // Дальше — UI, которому нужны данные о доступном обновлении.
+  if (!hasUpdate || !latest) return null;
+
   // ── Force-update: блокирующая модалка ──────────────────────────────────
   if (isForced) {
     return (
@@ -158,7 +197,7 @@ export function AppUpdateNotifier() {
             ) : null}
             <TouchableOpacity
               style={[styles.btn, styles.btnPrimary, { marginTop: 16 }]}
-              onPress={() => void handleUpdate()}
+              onPress={() => void handleUpdate(latest)}
             >
               <Ionicons name="download" size={16} color="#fff" />
               <Text style={styles.btnPrimaryText}>
@@ -196,7 +235,7 @@ export function AppUpdateNotifier() {
       </View>
       <TouchableOpacity
         style={[styles.btn, styles.btnPrimary, styles.btnCompact]}
-        onPress={() => void handleUpdate()}
+        onPress={() => void handleUpdate(latest)}
       >
         <Text style={styles.btnPrimaryText}>Обновить</Text>
       </TouchableOpacity>

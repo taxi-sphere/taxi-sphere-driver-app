@@ -34,7 +34,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useSettingsStore } from '@/stores/settings.store';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
-import { downloadAndInstallApk } from '@/services/apk-installer';
+import { useUpdateRequestStore } from '@/stores/update-request.store';
 
 type NavigatorApp = 'yandex' | '2gis' | 'google';
 
@@ -63,6 +63,7 @@ export default function SettingsScreen() {
   } = useSettingsStore();
 
   const { channel, latest, hasUpdate, checking, refresh } = useAppUpdate();
+  const requestUpdate = useUpdateRequestStore((st) => st.request);
 
   const [serverInput, setServerInput] = useState(serverUrl);
 
@@ -117,21 +118,13 @@ export default function SettingsScreen() {
         {
           text: 'Обновить',
           style: 'default',
-          onPress: async () => {
-            // Не блокируем UI: пользователь видит короткий toast
-            // «Скачивание началось...», потом Android покажет системный
-            // installer, либо мы поймаем ошибку и покажем alert.
-            const result = await downloadAndInstallApk(
-              latest.apkUrl,
-              latest.latestVersion,
-            );
-            if (!result.ok) {
-              Alert.alert(
-                'Не удалось обновить',
-                result.error ?? 'Неизвестная ошибка. Попробуйте ещё раз.',
-                [{ text: 'OK' }],
-              );
-            }
+          onPress: () => {
+            // v1.5.11: делегируем скачивание AppUpdateNotifier'у — он
+            // смонтирован в корневом layout и показывает модалку с
+            // прогрессом. Раньше здесь вызывался downloadAndInstallApk
+            // напрямую, без колбэка прогресса: водитель жал «Обновить», и
+            // 100 МБ качались вслепую, без единого индикатора.
+            requestUpdate(latest);
           },
         },
       ]);
