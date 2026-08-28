@@ -33,6 +33,18 @@ jobs:
     # Даём запас на случай флаки сети GitHub Release API.
     timeout-minutes: 60
 
+    # Ключ Google Maps. Читается в app.config.js, а app config вычисляется в
+    # сборке дважды: `expo prebuild` кладёт ключ в AndroidManifest как
+    # com.google.android.geo.API_KEY, а gradle-задача бандла JS — в
+    # Constants.expoConfig, откуда его читает isEmbeddedMapAvailable().
+    # Поэтому переменная задаётся на уровне job, а не одного шага.
+    #
+    # Secret заводится в Settings → Secrets and variables → Actions.
+    # Если он не задан, сборка НЕ падает: APK соберётся без встроенной карты,
+    # приложение останется рабочим (маршрут строится во внешнем навигаторе).
+    env:
+      GOOGLE_MAPS_ANDROID_API_KEY: ${{ secrets.GOOGLE_MAPS_ANDROID_API_KEY }}
+
     steps:
       # ── 1. checkout ─────────────────────────────────────────────────────────
       - name: Checkout at tag
@@ -68,6 +80,28 @@ jobs:
 
       - name: Install deps
         run: npm ci --no-audit --no-fund
+
+      # ── 3.1. Совместимость Expo-модулей с SDK ───────────────────────────────
+      # Ловит пакеты, поставленные обычным `npm install` вместо
+      # `npx expo install`: у них peerDependencies указаны как `expo: "*"`,
+      # поэтому npm молчит, typecheck и lint проходят, APK собирается — а на
+      # устройстве приложение падает при запуске. Так v1.5.6/v1.5.7 ушли в
+      # прод с expo-keep-awake@57 при SDK 55 и крешились с
+      # NoClassDefFoundError на expo.modules.kotlin.types.AnyTypeCache.
+      #
+      # Скрипт валит сборку ТОЛЬКО на расхождении мажора (для 0.x — минора).
+      # Голый `expo install --check` возвращает exit 1 на любом отставании,
+      # включая патчи (их обычно ~20) — такой шаг был бы вечно красным.
+      - name: Check Expo module compatibility
+        run: node scripts/check-expo-deps.mjs
+
+      # ── 3.2. Типы ───────────────────────────────────────────────────────────
+      # До v1.5.9 typecheck в CI не запускался вовсе, и ошибки копились
+      # незамеченными: 7 штук, включая `orderId does not exist in type
+      # Partial<LogEntry>` — из-за неё логи водителя доходили до админки без
+      # привязки к заказу, и разбирать инциденты было нечем.
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
 
       # ── 4. JDK 17 (нужен gradle Android plugin) ─────────────────────────────
       - name: Setup JDK 17
