@@ -37,13 +37,55 @@ const HOST = getServerHost();
 const DEFAULT_API_PORT = '3003';
 const DEFAULT_SOCKET_PORT = '3004';
 
+/**
+ * Запущено ли приложение под Metro (dev-сборка).
+ *
+ * `hostUri` заполняет dev-сервер, в релизном APK его нет. Признак нужен,
+ * чтобы зашитый в сборку прод-адрес НЕ перебивал локальный сервер
+ * разработчика: под Metro по-прежнему используется IP машины с Metro.
+ */
+const IS_METRO_BUILD = Boolean(Constants.expoConfig?.hostUri);
+
+/**
+ * Адрес сервера, зашитый в сборку (app.json → `expo.extra.defaultApiUrl`).
+ *
+ * ЗАЧЕМ (v1.5.13): до этого адрес в APK не зашивался вовсе —
+ * `EXPO_PUBLIC_API_URL` в `.env` закомментирован, в CI-workflow его нет, и
+ * `https://taxitest1.appvault.pro` встречался только как `placeholder` полей
+ * ввода. Значит после чистой установки приложение стучалось в
+ * `http://10.0.2.2:3003`, и водитель был обязан сам раскрыть свёрнутый блок
+ * «Настройки сервера» на экране входа и вписать адрес руками — барьер на
+ * первом же экране для человека, который просто установил приложение.
+ *
+ * Значение не секретное (это публичный домен сервиса), поэтому лежит прямо
+ * в app.json: не нужно ни env-обвязки, ни CI-секрета, и оно одинаково во
+ * всех путях сборки. Переопределяется при сборке через `EXPO_PUBLIC_API_URL`,
+ * а водителем — через поле «Настройки сервера», которое имеет приоритет над
+ * этим значением (см. `getApiUrl`).
+ */
+function bakedUrl(key: 'defaultApiUrl' | 'defaultSocketUrl'): string | null {
+  const extra = Constants.expoConfig?.extra as
+    | Record<string, unknown>
+    | undefined;
+  const value = extra?.[key];
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().replace(/\/$/, '');
+  return trimmed || null;
+}
+
 /** URL API сервера по умолчанию (используется если не задан в настройках) */
 export const DEFAULT_API_URL =
-  process.env.EXPO_PUBLIC_API_URL ?? `http://${HOST}:${DEFAULT_API_PORT}`;
+  process.env.EXPO_PUBLIC_API_URL ??
+  (IS_METRO_BUILD ? null : bakedUrl('defaultApiUrl')) ??
+  `http://${HOST}:${DEFAULT_API_PORT}`;
 
 /** URL Socket.IO по умолчанию */
 export const DEFAULT_SOCKET_URL =
-  process.env.EXPO_PUBLIC_SOCKET_URL ?? `http://${HOST}:${DEFAULT_SOCKET_PORT}`;
+  process.env.EXPO_PUBLIC_SOCKET_URL ??
+  (IS_METRO_BUILD
+    ? null
+    : bakedUrl('defaultSocketUrl') ?? bakedUrl('defaultApiUrl')) ??
+  `http://${HOST}:${DEFAULT_SOCKET_PORT}`;
 
 /**
  * Получить текущий API URL (из настроек или дефолтный).
