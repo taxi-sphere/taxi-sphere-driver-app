@@ -73,8 +73,47 @@ export async function downloadApk(
 
   const result = await dl.downloadAsync();
   if (!result?.uri) {
-    throw new Error('Не удалось скачать APK');
+    throw new Error('Не удалось скачать обновление');
   }
+
+  // v1.5.10: проверяем, что скачали ИМЕННО APK.
+  //
+  // Без этих проверок любой ответ сервера уезжал в системный установщик, и
+  // водитель видел невнятное «Не удалось обработать пакет» вместо причины.
+  // Реальный случай: релиз опубликовали в админке раньше, чем CI выложил
+  // файл — по ссылке отдавалась HTML-страница 404, скачивание доходило до
+  // 0% и падало без объяснений.
+  if (typeof result.status === 'number' && result.status >= 400) {
+    await FileSystem.deleteAsync(result.uri, { idempotent: true });
+    throw new Error(
+      result.status === 404
+        ? 'Файл обновления ещё не выложен на сервер. Попробуйте через несколько минут.'
+        : `Сервер вернул ошибку ${result.status} при скачивании обновления.`,
+    );
+  }
+
+  // APK — это ZIP-архив, он всегда начинается с сигнатуры PK\x03\x04
+  // (в base64 — «UEsDB…»). HTML-страница ошибки её не имеет.
+  try {
+    const head = await FileSystem.readAsStringAsync(result.uri, {
+      encoding: FileSystem.EncodingType.Base64,
+      position: 0,
+      length: 4,
+    });
+    if (!head.startsWith('UEsDB')) {
+      await FileSystem.deleteAsync(result.uri, { idempotent: true });
+      throw new Error(
+        'По ссылке пришёл не файл приложения. Проверьте адрес APK в админке.',
+      );
+    }
+  } catch (err) {
+    // Ошибку собственной проверки пробрасываем как есть; сбой чтения файла
+    // не должен блокировать установку — дальше решит системный установщик.
+    if (err instanceof Error && err.message.includes('не файл приложения')) {
+      throw err;
+    }
+  }
+
   return result.uri;
 }
 

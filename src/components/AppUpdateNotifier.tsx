@@ -27,6 +27,7 @@ import {
   Linking,
   ActivityIndicator,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
 import { downloadAndInstallApk, type DownloadProgress } from '@/services/apk-installer';
@@ -41,6 +42,7 @@ function formatMb(bytes: number): string {
 // ─── Компонент ──────────────────────────────────────────────────────────────
 
 export function AppUpdateNotifier() {
+  const insets = useSafeAreaInsets();
   const { currentVersion, latest, hasUpdate, isForced, dismissed, dismiss } = useAppUpdate();
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
@@ -179,7 +181,10 @@ export function AppUpdateNotifier() {
   if (dismissed) return null;
 
   return (
-    <View style={styles.banner}>
+    // v1.5.10: paddingTop с учётом системной строки. Баннер рендерится
+    // поверх всего экрана, и без отступа он налезал на часы, значки сети и
+    // батареи — текст «Обновление доступно» читался поверх статус-бара.
+    <View style={[styles.banner, { paddingTop: insets.top + 8 }]}>
       <Ionicons name="cloud-download-outline" size={18} color="#4f46e5" />
       <View style={{ flex: 1 }}>
         <Text style={styles.bannerTitle}>
