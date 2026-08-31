@@ -5,7 +5,7 @@
  *   Батчевая отправка на сервер, offline-очередь.
  * @dependencies: expo-location, expo-task-manager, driver.api, location.store
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-08-31 (v1.5.14)
  */
 
 import * as Location from 'expo-location';
@@ -203,34 +203,74 @@ export async function stopBackgroundTracking(): Promise<void> {
 /*  Background task definition                                                 */
 /* -------------------------------------------------------------------------- */
 
+/** Сырая точка, какой её приносит expo-location в фоновую задачу. */
+export interface RawBackgroundLocation {
+  coords: {
+    latitude: number;
+    longitude: number;
+    speed: number | null;
+    heading: number | null;
+  };
+  timestamp: number;
+}
+
+/** Приводит фоновые точки expo-location к формату, который ждёт сервер. */
+export function toLocationPoints(locations: RawBackgroundLocation[]): LocationPoint[] {
+  return locations.map((loc) => ({
+    lat: loc.coords.latitude,
+    lng: loc.coords.longitude,
+    speed: loc.coords.speed ?? undefined,
+    heading: loc.coords.heading ?? undefined,
+    recordedAt: new Date(loc.timestamp).toISOString(),
+  }));
+}
+
+/**
+ * Что делать с точками, которые принесла ФОНОВАЯ задача.
+ *
+ * ДВА КАНАЛА, ОБА НУЖНЫ.
+ *   1) Сокет — чтобы точка появилась на карте диспетчера сразу. До v1.5.14
+ *      фоновые точки уходили ТОЛЬКО батчем, и стоило водителю погасить
+ *      экран (обычный режим работы — телефон в держателе или в кармане),
+ *      как маркер на карте начинал шагать раз в 5–10 секунд. Процесс в
+ *      фоне жив — его держит foreground-service самого GPS-трекинга, —
+ *      поэтому сокет чаще всего тоже жив. Если Android его всё же усыпил,
+ *      `emitLocation` молча ничего не сделает, и останется батч, как было.
+ *   2) Очередь + REST — путь точки в `driver_location_history` и в
+ *      `lastSeenAt`. Сокет в БД историю не пишет, поэтому этот шаг
+ *      обязан отработать при любом исходе первого.
+ *
+ * Вынесено из тела задачи отдельной функцией, чтобы это поведение можно
+ * было проверить тестом: сама `TaskManager.defineTask` исполняется только
+ * внутри нативного рантайма.
+ */
+export function handleBackgroundLocations(points: LocationPoint[]): void {
+  if (points.length === 0) return;
+
+  for (const point of points) {
+    try {
+      socketService.emitLocation(point);
+    } catch (err) {
+      // Одна ошибка сокета означает, что не пройдут и остальные точки.
+      // Прерываемся и идём к очереди — она важнее.
+      console.warn(
+        '[Location] socket emit failed:',
+        err instanceof Error ? err.message : 'unknown',
+      );
+      break;
+    }
+  }
+
+  // background context — доступа к foreground-буферу нет, поэтому очередь.
+  useLocationStore.getState().enqueue(points);
+  void flushOfflineQueue();
+}
+
 TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   if (error) return;
 
-  const typedData = data as {
-    locations?: {
-      coords: {
-        latitude: number;
-        longitude: number;
-        speed: number | null;
-        heading: number | null;
-      };
-      timestamp: number;
-    }[];
-  };
+  const typedData = data as { locations?: RawBackgroundLocation[] };
+  if (!typedData.locations) return;
 
-  if (typedData.locations) {
-    const points: LocationPoint[] = typedData.locations.map((loc) => ({
-      lat: loc.coords.latitude,
-      lng: loc.coords.longitude,
-      speed: loc.coords.speed ?? undefined,
-      heading: loc.coords.heading ?? undefined,
-      recordedAt: new Date(loc.timestamp).toISOString(),
-    }));
-
-    // Добавляем в очередь (background context — нет доступа к foreground буферу)
-    useLocationStore.getState().enqueue(points);
-
-    // Пытаемся отправить
-    void flushOfflineQueue();
-  }
+  handleBackgroundLocations(toLocationPoints(typedData.locations));
 });
