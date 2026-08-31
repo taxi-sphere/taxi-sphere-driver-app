@@ -23,7 +23,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /** Подписка, которую возвращает watchPositionAsync. */
 const removeSubscription = vi.fn();
-const watchPositionAsync = vi.fn(async () => ({ remove: removeSubscription }));
+const watchPositionAsync = vi.fn(async (..._args: unknown[]) => ({
+  remove: removeSubscription,
+}));
 
 vi.mock('expo-location', () => ({
   Accuracy: { Balanced: 3, High: 4, BestForNavigation: 6 },

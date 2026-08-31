@@ -11,11 +11,10 @@
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
+import { useDriverProfile } from '@/hooks/useDriverProfile';
 import { useLocationTracking } from '@/hooks/useLocationTracking';
 import { useConnectionStore } from '@/stores/connection.store';
-import { getProfile } from '@/api/driver.api';
 
 interface TopBarProps {
   onMenuPress: () => void;
@@ -28,12 +27,9 @@ export function TopBar({ onMenuPress }: TopBarProps) {
   const socketStatus = useConnectionStore((s) => s.socketStatus);
   const isConnected = socketStatus === 'connected';
 
-  const { data: profile } = useQuery({
-    queryKey: ['driver', 'profile'],
-    queryFn: getProfile,
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
-  });
+  // Тот же запрос, что был здесь раньше, плюс восстановление статуса
+  // водителя при старте — см. useDriverProfile.
+  const { data: profile } = useDriverProfile();
 
   return (
     <View style={styles.wrapper}>
