@@ -22,6 +22,7 @@ import {
   stopBackgroundTracking,
   flushOfflineQueue,
   isForegroundTrackingActive,
+  isTrackingBusy,
 } from '@/services/location.service';
 
 /** Проверить GPS-разрешения и состояние модуля, обновить store */
@@ -45,7 +46,10 @@ async function checkGpsState(): Promise<void> {
     // загорался зелёным даже когда подписки не было вовсе.
     const enabled = await Location.hasServicesEnabledAsync();
     if (!enabled) store.setGpsActive(false);
-    else store.setGpsActive(isForegroundTrackingActive());
+    // Пока идёт перезапуск трекинга (смена статуса водителя), промежуточное
+    // «подписки нет» — не состояние, а шов между stop и start. Не трогаем
+    // флаг: очередь выставит его сама, когда отработает последняя операция.
+    else if (!isTrackingBusy()) store.setGpsActive(isForegroundTrackingActive());
   } catch {
     // Не блокируем UI
   }

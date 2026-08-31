@@ -228,4 +228,35 @@ describe('isForegroundTrackingActive', () => {
     expect(isForegroundTrackingActive()).toBe(true);
     expect(setGpsActive).toHaveBeenLastCalledWith(true);
   });
+
+  /**
+   * Пользовательская жалоба на v1.5.15: при переключении «Свободен ↔ Занят»
+   * значок GPS на секунду загорался красным. Перезапуск трекинга — это
+   * stop → start подряд, и промежуточное «подписки нет» не состояние, а шов
+   * между операциями. Индикатор не должен его видеть ВООБЩЕ.
+   */
+  it('при перезапуске индикатор ни разу не гаснет', async () => {
+    await startForegroundTracking(false);
+    setGpsActive.mockClear();
+
+    // Ровно то, что делает эффект провайдера при смене статуса.
+    const ops = [
+      stopForegroundTracking(),
+      startForegroundTracking(true),
+    ];
+    await Promise.all(ops);
+
+    const values = setGpsActive.mock.calls.map((c) => c[0]);
+    expect(values).not.toContain(false);
+    expect(isForegroundTrackingActive()).toBe(true);
+  });
+
+  it('одиночная остановка индикатор всё-таки гасит', async () => {
+    await startForegroundTracking(false);
+    setGpsActive.mockClear();
+
+    await stopForegroundTracking();
+
+    expect(setGpsActive).toHaveBeenLastCalledWith(false);
+  });
 });

@@ -78,8 +78,31 @@ function syncGpsActiveFlag(): void {
  */
 let trackingChain: Promise<unknown> = Promise.resolve();
 
+/** Сколько операций трекинга ещё не отработало (включая текущую). */
+let pendingTrackingOps = 0;
+
+/** Идёт ли прямо сейчас перезапуск трекинга (очередь не пуста). */
+export function isTrackingBusy(): boolean {
+  return pendingTrackingOps > 0;
+}
+
 function serializeTracking<T>(task: () => Promise<T>): Promise<T> {
-  const next = trackingChain.then(task, task);
+  pendingTrackingOps += 1;
+
+  const run = () =>
+    task().finally(() => {
+      pendingTrackingOps -= 1;
+      // Индикатор обновляем ТОЛЬКО когда очередь опустела.
+      //
+      // При смене статуса водителя эффект делает stop → start подряд, и
+      // «подписки нет» в середине — это шов между операциями, а не
+      // состояние. В v1.5.15 флаг выставлялся на каждом шаге, и значок GPS
+      // на секунду загорался красным при каждом переключении «Свободен ↔
+      // Занят». Водителя это пугает на ровном месте: связь и GPS в порядке.
+      if (pendingTrackingOps === 0) syncGpsActiveFlag();
+    });
+
+  const next = trackingChain.then(run, run);
   trackingChain = next.catch(() => undefined);
   return next;
 }
@@ -173,7 +196,8 @@ async function startForegroundTrackingImpl(
     },
   );
 
-  syncGpsActiveFlag();
+  // Флаг индикатора здесь НЕ трогаем — его выставит очередь, когда
+  // отработают все операции подряд (см. serializeTracking).
 
   // Таймер батчевой отправки
   const interval = isOnOrder
@@ -195,11 +219,8 @@ async function stopForegroundTrackingImpl(): Promise<void> {
   }
   // Отправить оставшиеся точки
   await flushBuffer();
-  // Не `false`, а фактическое состояние: остановка и следующий запуск могут
-  // наложиться (эффект провайдера перезапускается при смене статуса или
-  // разрешения), и «поздний» stop не должен гасить индикатор уже живой
-  // подписки.
-  syncGpsActiveFlag();
+  // Флаг индикатора выставляет очередь после последней операции: одиночная
+  // остановка погасит его, остановка перед перезапуском — нет.
 }
 
 /* -------------------------------------------------------------------------- */
