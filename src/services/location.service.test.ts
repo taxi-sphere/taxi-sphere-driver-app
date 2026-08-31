@@ -211,4 +211,21 @@ describe('isForegroundTrackingActive', () => {
     expect(watchPositionAsync).toHaveBeenCalledTimes(2);
     expect(isForegroundTrackingActive()).toBe(true);
   });
+
+  /**
+   * Гонка из боя: эффект провайдера перезапускается, React делает cleanup
+   * (stop) и тут же тело (start), ничего не дожидаясь. Без очереди «поздний»
+   * stop договаривал после start и гасил только что запущенный трекинг —
+   * водитель со свёрнутым приложением переставал слать координаты.
+   */
+  it('stop, вызванный перед start без await, не гасит новый трекинг', async () => {
+    await startForegroundTracking(false);
+
+    const stopping = stopForegroundTracking();
+    const starting = startForegroundTracking(true);
+    await Promise.all([stopping, starting]);
+
+    expect(isForegroundTrackingActive()).toBe(true);
+    expect(setGpsActive).toHaveBeenLastCalledWith(true);
+  });
 });

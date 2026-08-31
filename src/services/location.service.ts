@@ -5,7 +5,8 @@
  *   Батчевая отправка на сервер, offline-очередь.
  * @dependencies: expo-location, expo-task-manager, driver.api, location.store
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-08-31 (v1.5.14)
+ * @updated: 2026-08-31 (v1.5.15 — очередь запусков/остановок трекинга,
+ *   честный признак живой подписки)
  */
 
 import * as Location from 'expo-location';
@@ -53,6 +54,34 @@ export function isForegroundTrackingActive(): boolean {
 /** Привести `gpsActive` в сторе к фактическому состоянию подписки. */
 function syncGpsActiveFlag(): void {
   useConnectionStore.getState().setGpsActive(isForegroundTrackingActive());
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Очередь запусков/остановок                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Все запуски и остановки трекинга идут ОДНОЙ цепочкой, строго по порядку
+ * вызова.
+ *
+ * ЗАЧЕМ. Эффект `LocationProvider` перезапускается при смене статуса или
+ * разрешения: React сначала выполняет cleanup (две остановки), сразу за ним
+ * тело эффекта (два запуска) — и всё это асинхронно, без ожидания. Без
+ * очереди «поздняя» остановка договаривала уже ПОСЛЕ нового запуска и гасила
+ * его: `stopLocationUpdatesAsync` снимал только что поставленную фоновую
+ * задачу. Снаружи это выглядело так — водитель свернул приложение, и точки
+ * прекращались, хотя трекинг «запущен». Поймано на эмуляторе: после холодного
+ * старта передний план работал, а с погашенным экраном поток обрывался.
+ *
+ * Ошибка одного шага не рвёт цепочку — иначе одна неудачная остановка
+ * заблокировала бы все последующие запуски.
+ */
+let trackingChain: Promise<unknown> = Promise.resolve();
+
+function serializeTracking<T>(task: () => Promise<T>): Promise<T> {
+  const next = trackingChain.then(task, task);
+  trackingChain = next.catch(() => undefined);
+  return next;
 }
 
 /** Добавить точку в буфер, отправить если полный */
@@ -106,10 +135,10 @@ export async function flushOfflineQueue(): Promise<void> {
 /*  Foreground tracking                                                        */
 /* -------------------------------------------------------------------------- */
 
-export async function startForegroundTracking(
+async function startForegroundTrackingImpl(
   isOnOrder: boolean,
 ): Promise<void> {
-  await stopForegroundTracking();
+  await stopForegroundTrackingImpl();
 
   const { status } = await Location.requestForegroundPermissionsAsync();
   if (status !== 'granted') {
@@ -155,7 +184,7 @@ export async function startForegroundTracking(
   }, interval);
 }
 
-export async function stopForegroundTracking(): Promise<void> {
+async function stopForegroundTrackingImpl(): Promise<void> {
   if (foregroundSubscription) {
     foregroundSubscription.remove();
     foregroundSubscription = null;
@@ -177,7 +206,7 @@ export async function stopForegroundTracking(): Promise<void> {
 /*  Background tracking                                                        */
 /* -------------------------------------------------------------------------- */
 
-export async function startBackgroundTracking(
+async function startBackgroundTrackingImpl(
   isOnOrder: boolean,
 ): Promise<void> {
   const { status: bgStatus } =
@@ -214,13 +243,33 @@ export async function startBackgroundTracking(
   });
 }
 
-export async function stopBackgroundTracking(): Promise<void> {
+async function stopBackgroundTrackingImpl(): Promise<void> {
   const isStarted = await Location.hasStartedLocationUpdatesAsync(
     BACKGROUND_LOCATION_TASK,
   ).catch(() => false);
   if (isStarted) {
     await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Публичные обёртки — только через очередь (см. serializeTracking)           */
+/* -------------------------------------------------------------------------- */
+
+export function startForegroundTracking(isOnOrder: boolean): Promise<void> {
+  return serializeTracking(() => startForegroundTrackingImpl(isOnOrder));
+}
+
+export function stopForegroundTracking(): Promise<void> {
+  return serializeTracking(() => stopForegroundTrackingImpl());
+}
+
+export function startBackgroundTracking(isOnOrder: boolean): Promise<void> {
+  return serializeTracking(() => startBackgroundTrackingImpl(isOnOrder));
+}
+
+export function stopBackgroundTracking(): Promise<void> {
+  return serializeTracking(() => stopBackgroundTrackingImpl());
 }
 
 /* -------------------------------------------------------------------------- */
