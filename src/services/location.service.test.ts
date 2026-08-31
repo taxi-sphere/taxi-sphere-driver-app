@@ -21,9 +21,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /* --- Нативное окружение, которого в node нет ------------------------------ */
 
+/** Подписка, которую возвращает watchPositionAsync. */
+const removeSubscription = vi.fn();
+const watchPositionAsync = vi.fn(async () => ({ remove: removeSubscription }));
+
 vi.mock('expo-location', () => ({
   Accuracy: { Balanced: 3, High: 4, BestForNavigation: 6 },
-  watchPositionAsync: vi.fn(),
+  watchPositionAsync: (...args: unknown[]) => watchPositionAsync(...args),
   startLocationUpdatesAsync: vi.fn(),
   stopLocationUpdatesAsync: vi.fn(),
   hasStartedLocationUpdatesAsync: vi.fn(async () => false),
@@ -62,9 +66,10 @@ vi.mock('@/stores/location.store', () => ({
   },
 }));
 
+const setGpsActive = vi.fn();
 vi.mock('@/stores/connection.store', () => ({
   useConnectionStore: {
-    getState: () => ({ setGpsActive: vi.fn(), setGpsPermission: vi.fn() }),
+    getState: () => ({ setGpsActive, setGpsPermission: vi.fn() }),
   },
 }));
 
@@ -73,7 +78,13 @@ vi.mock('@/stores/connection.store', () => ({
 // `emitLocation`, `enqueue` и прочие. Подними импорт к началу файла, и они
 // окажутся в TDZ.
 // eslint-disable-next-line import/first
-import { handleBackgroundLocations, toLocationPoints } from './location.service';
+import {
+  handleBackgroundLocations,
+  toLocationPoints,
+  isForegroundTrackingActive,
+  startForegroundTracking,
+  stopForegroundTracking,
+} from './location.service';
 
 /** Точка в том виде, в каком её приносит expo-location. */
 function rawPoint(lat: number, lng: number, timestamp: number) {
@@ -87,6 +98,9 @@ beforeEach(() => {
   emitLocation.mockReset();
   enqueue.mockReset();
   sendLocation.mockReset();
+  setGpsActive.mockReset();
+  removeSubscription.mockReset();
+  watchPositionAsync.mockClear();
 });
 
 describe('toLocationPoints', () => {
@@ -152,5 +166,47 @@ describe('handleBackgroundLocations', () => {
 
     const sent = emitLocation.mock.calls[0]![0] as { recordedAt?: string };
     expect(sent.recordedAt).toBe(new Date(1_756_000_000_000).toISOString());
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Признак живой подписки                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `gpsActive` в сторе — это индикатор в шапке приложения. До v1.5.15 он
+ * считался как «службы включены И разрешение выдано», то есть загорался
+ * зелёным и тогда, когда подписки не было вовсе: водитель видел, что всё в
+ * порядке, а на сервер не уходило ни одной точки. Теперь единственный
+ * источник — факт подписки, и эти тесты его фиксируют.
+ */
+describe('isForegroundTrackingActive', () => {
+  it('до запуска трекинга — false', () => {
+    expect(isForegroundTrackingActive()).toBe(false);
+  });
+
+  it('после запуска — true, и флаг в сторе выставлен по нему', async () => {
+    await startForegroundTracking(false);
+
+    expect(isForegroundTrackingActive()).toBe(true);
+    expect(setGpsActive).toHaveBeenLastCalledWith(true);
+  });
+
+  it('после остановки — false, подписка снята', async () => {
+    await startForegroundTracking(false);
+    await stopForegroundTracking();
+
+    expect(isForegroundTrackingActive()).toBe(false);
+    expect(removeSubscription).toHaveBeenCalled();
+    expect(setGpsActive).toHaveBeenLastCalledWith(false);
+  });
+
+  it('повторный запуск снимает прежнюю подписку и оставляет ровно одну', async () => {
+    await startForegroundTracking(false);
+    await startForegroundTracking(true);
+
+    expect(removeSubscription).toHaveBeenCalledTimes(1);
+    expect(watchPositionAsync).toHaveBeenCalledTimes(2);
+    expect(isForegroundTrackingActive()).toBe(true);
   });
 });

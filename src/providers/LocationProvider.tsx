@@ -6,7 +6,8 @@
  *   Следит за изменением GPS-разрешений и состоянием GPS-модуля.
  * @dependencies: location.service, driver.store, connection.store, expo-location
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-04-13 18:00:00
+ * @updated: 2026-08-31 (v1.5.15 — трекинг перезапускается при выдаче
+ *   разрешения; gpsActive = факт подписки, а не «разрешение есть»)
  */
 
 import { useEffect, useRef } from 'react';
@@ -20,6 +21,7 @@ import {
   startBackgroundTracking,
   stopBackgroundTracking,
   flushOfflineQueue,
+  isForegroundTrackingActive,
 } from '@/services/location.service';
 
 /** Проверить GPS-разрешения и состояние модуля, обновить store */
@@ -36,9 +38,14 @@ async function checkGpsState(): Promise<void> {
       store.setGpsPermission(perm === 'granted' ? 'granted' : 'denied');
     }
 
+    // GPS-модуль выключен в системе — подписка бесполезна, гасим флаг явно.
+    // Во всех остальных случаях `gpsActive` принадлежит location.service:
+    // это факт живой подписки, а не «разрешение есть». Раньше здесь стояло
+    // `enabled && perm === 'granted'`, и каждые 30 секунд индикатор
+    // загорался зелёным даже когда подписки не было вовсе.
     const enabled = await Location.hasServicesEnabledAsync();
-    const currentPerm = useConnectionStore.getState().gpsPermission;
-    store.setGpsActive(enabled && currentPerm === 'granted');
+    if (!enabled) store.setGpsActive(false);
+    else store.setGpsActive(isForegroundTrackingActive());
   } catch {
     // Не блокируем UI
   }
@@ -46,6 +53,7 @@ async function checkGpsState(): Promise<void> {
 
 export function LocationProvider({ children }: { children: React.ReactNode }) {
   const status = useDriverStore((s) => s.status);
+  const gpsPermission = useConnectionStore((s) => s.gpsPermission);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   // Проверяем GPS при монтировании
@@ -77,13 +85,26 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(interval);
   }, []);
 
-  // Запуск/остановка трекинга по статусу
+  // Запуск/остановка трекинга по статусу И по разрешению.
+  //
+  // v1.5.15: разрешение обязано быть в зависимостях. Если водитель отказал
+  // при первом запуске, а потом включил геолокацию в настройках Android и
+  // вернулся в приложение, `checkGpsState` по AppState → active обновит
+  // `gpsPermission`, и подписка оформится. До этой правки эффект зависел
+  // только от статуса: приложение оставалось без подписки до перезапуска
+  // или ручного переключения статуса, показывая при этом зелёный GPS.
   useEffect(() => {
     if (status === 'offline') {
       void stopForegroundTracking();
       void stopBackgroundTracking();
       return;
     }
+
+    // Отказ — подписываться не на что. Ждём, пока разрешение появится:
+    // как только `gpsPermission` станет 'granted', эффект перезапустится.
+    // 'undetermined' пропускаем дальше — startForegroundTracking сам
+    // покажет системный запрос.
+    if (gpsPermission === 'denied') return;
 
     const isOnOrder = status === 'on_order';
     void startForegroundTracking(isOnOrder);
@@ -93,7 +114,7 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
       void stopForegroundTracking();
       void stopBackgroundTracking();
     };
-  }, [status]);
+  }, [status, gpsPermission]);
 
   return <>{children}</>;
 }

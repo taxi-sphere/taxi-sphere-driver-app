@@ -35,6 +35,26 @@ let sendTimer: ReturnType<typeof setInterval> | null = null;
 let foregroundSubscription: Location.LocationSubscription | null = null;
 let isFlushing = false;
 
+/**
+ * Идёт ли ПРЯМО СЕЙЧАС подписка на координаты.
+ *
+ * Единственный честный ответ на вопрос «работает ли GPS», и потому
+ * единственный источник для `gpsActive` в сторе. До v1.5.15 индикатор в
+ * шапке считался как «службы геолокации включены И разрешение выдано» —
+ * это не одно и то же: приложение может иметь разрешение и не быть
+ * подписанным (так и было, когда разрешение выдавали уже после старта).
+ * Водитель видел зелёный значок и не отправлял ни одной точки, а диспетчер
+ * видел его «без GPS».
+ */
+export function isForegroundTrackingActive(): boolean {
+  return foregroundSubscription !== null;
+}
+
+/** Привести `gpsActive` в сторе к фактическому состоянию подписки. */
+function syncGpsActiveFlag(): void {
+  useConnectionStore.getState().setGpsActive(isForegroundTrackingActive());
+}
+
 /** Добавить точку в буфер, отправить если полный */
 function bufferPoint(point: LocationPoint): void {
   pointsBuffer.push(point);
@@ -124,7 +144,7 @@ export async function startForegroundTracking(
     },
   );
 
-  useConnectionStore.getState().setGpsActive(true);
+  syncGpsActiveFlag();
 
   // Таймер батчевой отправки
   const interval = isOnOrder
@@ -146,7 +166,11 @@ export async function stopForegroundTracking(): Promise<void> {
   }
   // Отправить оставшиеся точки
   await flushBuffer();
-  useConnectionStore.getState().setGpsActive(false);
+  // Не `false`, а фактическое состояние: остановка и следующий запуск могут
+  // наложиться (эффект провайдера перезапускается при смене статуса или
+  // разрешения), и «поздний» stop не должен гасить индикатор уже живой
+  // подписки.
+  syncGpsActiveFlag();
 }
 
 /* -------------------------------------------------------------------------- */
