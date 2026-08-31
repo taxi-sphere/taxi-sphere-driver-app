@@ -13,8 +13,15 @@
  *   поломка сокета не должна мешать очереди — только она ведёт точку в
  *   историю и в `lastSeenAt`.
  *
+ *   v1.5.16: сюда же — параметры самой съёмки. Профилей было четыре, и
+ *   худший (фон + свободен: 15 с, порог 50 м, точность Balanced) доставался
+ *   самому частому состоянию водителя. Теперь профиль один, и тесты ниже
+ *   стерегут именно это: разъедутся параметры снова — узнаем из теста, а не
+ *   из жалобы на дёргающиеся машины.
+ *
  * @dependencies: vitest, @/services/location.service
  * @created: 2026-08-31 (v1.5.14)
+ * @updated: 2026-09-01 (v1.5.16 — единый профиль съёмки GPS)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -27,10 +34,12 @@ const watchPositionAsync = vi.fn(async (..._args: unknown[]) => ({
   remove: removeSubscription,
 }));
 
+const startLocationUpdatesAsync = vi.fn(async (..._args: unknown[]) => undefined);
+
 vi.mock('expo-location', () => ({
   Accuracy: { Balanced: 3, High: 4, BestForNavigation: 6 },
   watchPositionAsync: (...args: unknown[]) => watchPositionAsync(...args),
-  startLocationUpdatesAsync: vi.fn(),
+  startLocationUpdatesAsync: (...args: unknown[]) => startLocationUpdatesAsync(...args),
   stopLocationUpdatesAsync: vi.fn(),
   hasStartedLocationUpdatesAsync: vi.fn(async () => false),
   requestForegroundPermissionsAsync: vi.fn(async () => ({ status: 'granted' })),
@@ -86,6 +95,7 @@ import {
   isForegroundTrackingActive,
   startForegroundTracking,
   stopForegroundTracking,
+  startBackgroundTracking,
 } from './location.service';
 
 /** Точка в том виде, в каком её приносит expo-location. */
@@ -103,6 +113,7 @@ beforeEach(() => {
   setGpsActive.mockReset();
   removeSubscription.mockReset();
   watchPositionAsync.mockClear();
+  startLocationUpdatesAsync.mockClear();
 });
 
 describe('toLocationPoints', () => {
@@ -258,5 +269,55 @@ describe('isForegroundTrackingActive', () => {
     await stopForegroundTracking();
 
     expect(setGpsActive).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe('единый профиль съёмки GPS (v1.5.16)', () => {
+  /** Параметры, с которыми реально позвали expo-location. */
+  const foregroundArgs = () => watchPositionAsync.mock.calls[0]![0] as Record<string, number>;
+  const backgroundArgs = () => startLocationUpdatesAsync.mock.calls[0]![1] as Record<string, number>;
+
+  it('на экране параметры не зависят от того, на заказе водитель или нет', async () => {
+    await startForegroundTracking(false);
+    const free = foregroundArgs();
+    await stopForegroundTracking();
+    watchPositionAsync.mockClear();
+
+    await startForegroundTracking(true);
+    expect(foregroundArgs()).toEqual(free);
+    await stopForegroundTracking();
+  });
+
+  it('в фоне параметры те же, что и на экране', async () => {
+    await startForegroundTracking(false);
+    const { accuracy, timeInterval, distanceInterval } = foregroundArgs();
+    await stopForegroundTracking();
+
+    await startBackgroundTracking(false);
+    const bg = backgroundArgs();
+    expect(bg.accuracy).toBe(accuracy);
+    expect(bg.timeInterval).toBe(timeInterval);
+    expect(bg.distanceInterval).toBe(distanceInterval);
+  });
+
+  it('точность в фоне НЕ Balanced', async () => {
+    // Balanced — «порядка ста метров», позиция по вышкам и Wi-Fi. Машина
+    // прыгала на карте, стоя на месте, и буфер на карте это не лечит.
+    await startBackgroundTracking(false);
+    expect(backgroundArgs().accuracy).not.toBe(3);
+    expect(backgroundArgs().accuracy).toBe(4);
+  });
+
+  it('порог смещения не больше 15 м', async () => {
+    // Порог 50 м = точка не придёт, пока машина не проехала эти 50 м. В
+    // пробке на 5 км/ч это полминуты тишины, а потом скачок маркера.
+    await startBackgroundTracking(false);
+    expect(backgroundArgs().distanceInterval).toBeLessThanOrEqual(15);
+  });
+
+  it('в фоне отложенная доставка выключена', async () => {
+    // Иначе Android копит точки и отдаёт пачкой: несколько разом, потом тишина.
+    await startBackgroundTracking(false);
+    expect(backgroundArgs().deferredUpdatesInterval).toBe(0);
   });
 });

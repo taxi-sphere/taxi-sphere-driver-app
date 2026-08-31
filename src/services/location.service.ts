@@ -5,8 +5,8 @@
  *   Батчевая отправка на сервер, offline-очередь.
  * @dependencies: expo-location, expo-task-manager, driver.api, location.store
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-08-31 (v1.5.15 — очередь запусков/остановок трекинга,
- *   честный признак живой подписки)
+ * @updated: 2026-09-01 (v1.5.16 — единый профиль съёмки GPS во всех
+ *   состояниях: точность High и в фоне, без отложенной доставки)
  */
 
 import * as Location from 'expo-location';
@@ -21,10 +21,7 @@ import {
   LOCATION_BATCH_MAX,
   LOCATION_SEND_INTERVAL_ONLINE_MS,
   LOCATION_SEND_INTERVAL_ON_ORDER_MS,
-  GPS_FOREGROUND_ONLINE,
-  GPS_FOREGROUND_ON_ORDER,
-  GPS_BACKGROUND_ONLINE,
-  GPS_BACKGROUND_ON_ORDER,
+  GPS_TRACKING,
 } from '@/lib/constants';
 
 /* -------------------------------------------------------------------------- */
@@ -170,16 +167,14 @@ async function startForegroundTrackingImpl(
   }
   useConnectionStore.getState().setGpsPermission('granted');
 
-  const params = isOnOrder ? GPS_FOREGROUND_ON_ORDER : GPS_FOREGROUND_ONLINE;
-  const accuracy = isOnOrder
-    ? Location.Accuracy.BestForNavigation
-    : Location.Accuracy.High;
-
+  // v1.5.16: параметры съёмки одинаковы во всех состояниях — см. GPS_TRACKING.
+  // `isOnOrder` ниже ещё используется, но только для частоты БАТЧЕВОЙ
+  // отправки истории, а не для самой съёмки координат.
   foregroundSubscription = await Location.watchPositionAsync(
     {
-      accuracy,
-      timeInterval: params.timeInterval,
-      distanceInterval: params.distanceInterval,
+      accuracy: Location.Accuracy.High,
+      timeInterval: GPS_TRACKING.timeInterval,
+      distanceInterval: GPS_TRACKING.distanceInterval,
     },
     (location) => {
       const point: LocationPoint = {
@@ -234,13 +229,6 @@ async function startBackgroundTrackingImpl(
     await Location.requestBackgroundPermissionsAsync();
   if (bgStatus !== 'granted') return;
 
-  const params = isOnOrder
-    ? GPS_BACKGROUND_ON_ORDER
-    : GPS_BACKGROUND_ONLINE;
-  const accuracy = isOnOrder
-    ? Location.Accuracy.High
-    : Location.Accuracy.Balanced;
-
   const isStarted = await Location.hasStartedLocationUpdatesAsync(
     BACKGROUND_LOCATION_TASK,
   );
@@ -249,10 +237,16 @@ async function startBackgroundTrackingImpl(
   }
 
   await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
-    accuracy,
-    timeInterval: params.timeInterval,
-    distanceInterval: params.distanceInterval,
-    deferredUpdatesInterval: params.timeInterval,
+    // v1.5.16: те же параметры, что и в foreground. Раньше здесь стояла
+    // точность Balanced — «порядка ста метров», позиция по вышкам и Wi-Fi:
+    // машина прыгала на карте, стоя на месте.
+    accuracy: Location.Accuracy.High,
+    timeInterval: GPS_TRACKING.timeInterval,
+    distanceInterval: GPS_TRACKING.distanceInterval,
+    // 0, а не интервал съёмки: отложенная доставка разрешает Android
+    // копить точки и отдавать их пачкой. Для живой карты это ровно тот
+    // случай, когда несколько точек приходят одновременно, а потом тишина.
+    deferredUpdatesInterval: 0,
     showsBackgroundLocationIndicator: true,
     foregroundService: {
       notificationTitle: 'Taxi Sphere',
