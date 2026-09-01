@@ -23,6 +23,7 @@ import {
   LOCATION_SEND_INTERVAL_ON_ORDER_MS,
   GPS_TRACKING,
 } from '@/lib/constants';
+import { lightThemeColors } from '@/lib/design/palette';
 
 /* -------------------------------------------------------------------------- */
 /*  Буфер точек для батчевой отправки                                          */
@@ -253,7 +254,11 @@ async function startBackgroundTrackingImpl(
       notificationBody: isOnOrder
         ? 'Выполняется заказ'
         : 'Вы на линии',
-      notificationColor: '#4f46e5',
+      // Цвет значка в системной шторке. Берётся из СВЕТЛОЙ палитры
+      // намеренно: уведомление рисует система на своём фоне, тема
+      // приложения к нему отношения не имеет — но и расходиться с
+      // бренд-цветом ему незачем.
+      notificationColor: lightThemeColors.primary,
     },
   });
 }

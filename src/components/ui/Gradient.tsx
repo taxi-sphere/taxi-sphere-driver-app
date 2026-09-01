@@ -63,14 +63,26 @@ export function Gradient({
 
   return (
     <View style={[{ borderRadius: radius, overflow: 'hidden' }, style]}>
-      <Svg style={StyleSheet.absoluteFill} width="100%" height="100%">
+      {/*
+        Единичный квадрат, растянутый на всю площадь (`viewBox` +
+        `preserveAspectRatio="none"`), а НЕ проценты.
+
+        Проверено на эмуляторе: с `width="100%" height="100%"` заливка
+        рисовалась по устаревшему измерению и обрывалась выше низа блока —
+        на экране входа градиент кончался прямо посередине заголовка, а
+        белая подпись под ним оказывалась на светлом фоне, то есть
+        невидимой. Проценты в react-native-svg считаются от размера,
+        известного на момент отрисовки, и внутри `absoluteFill` он ещё не
+        окончательный. Единичному квадрату мерить нечего.
+      */}
+      <Svg style={StyleSheet.absoluteFill} viewBox="0 0 1 1" preserveAspectRatio="none">
         <Defs>
           <LinearGradient id={id} x1={v.x1} y1={v.y1} x2={v.x2} y2={v.y2}>
             <Stop offset="0" stopColor={from} />
             <Stop offset="1" stopColor={to} />
           </LinearGradient>
         </Defs>
-        <Rect x="0" y="0" width="100%" height="100%" fill={`url(#${id})`} />
+        <Rect x="0" y="0" width="1" height="1" fill={`url(#${id})`} />
       </Svg>
       {children}
     </View>
