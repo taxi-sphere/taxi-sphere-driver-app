@@ -231,7 +231,12 @@ jobs:
           echo "HTTP $CODE"
           echo "$BODY"
           if [ "$CODE" != "200" ] && [ "$CODE" != "201" ]; then
-            echo "::warning::Регистрация в БД не прошла (HTTP $CODE). Возможно прод ещё не обновлён до v1.99.25 (нет service-token поддержки). Вставьте URL вручную в /admin/driver-app/releases:"
+            if [ "$CODE" = "401" ]; then
+              echo "::warning::HTTP 401 — запрос отбит ДО маршрута (proxy.ts закрывает /api/admin/* по JWT-куке). Нужен прод >= v1.99.57: там proxy пропускает вызов с верным X-Service-Token. Проверьте также, что ADMIN_API_TOKEN совпадает с INTERNAL_SECRET на проде."
+            elif [ "$CODE" = "403" ]; then
+              echo "::warning::HTTP 403 — маршрут отверг токен: ADMIN_API_TOKEN не совпадает с INTERNAL_SECRET на проде."
+            fi
+            echo "::warning::Регистрация в БД не прошла (HTTP $CODE). Вставьте URL вручную в /admin/driver-app/releases:"
             echo "  $APK_URL"
             exit 0
           fi
