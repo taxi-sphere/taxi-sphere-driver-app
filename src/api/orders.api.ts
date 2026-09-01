@@ -54,7 +54,18 @@ export async function getAvailableOrders(params?: {
  * водителем, и в списке свободных заказов ему делать нечего.
  */
 export async function getScheduledOrders(): Promise<AvailableOrder[]> {
-  const res = await apiGet('driver/orders/scheduled');
+  let res: unknown;
+  try {
+    res = await apiGet('driver/orders/scheduled');
+  } catch {
+    // Сервер старше приложения — эндпоинт появился в v1.99.59. Пустой
+    // список честнее ошибки: предзаказов у водителя действительно нет,
+    // просто потому что сервер о них ещё не умеет рассказывать.
+    // Приложение обновляется независимо от сервера, так что это штатное
+    // сочетание версий, а не сбой.
+    return [];
+  }
+
   const parsed = scheduledOrdersResponseSchema.safeParse(res);
   if (!parsed.success) {
     driverLogger.error('Schema validation failed: scheduled orders', {
