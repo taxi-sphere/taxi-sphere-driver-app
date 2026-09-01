@@ -18,7 +18,7 @@
  */
 
 import { useEffect } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -38,6 +38,15 @@ interface EarningsChartProps {
 }
 
 const CHART_HEIGHT = 120;
+/**
+ * Со скольких дней график начинает прокручиваться.
+ *
+ * Месяц — это 30 столбцов; втиснутые в ширину экрана, они дают по пять
+ * пикселей на день, и подписи под ними сливаются. Начиная с этого числа
+ * столбцы получают фиксированную ширину, а ряд прокручивается вбок.
+ */
+const SCROLL_FROM_DAYS = 10;
+const SCROLLED_COLUMN_WIDTH = 34;
 const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
 export function EarningsChart({ data, title }: EarningsChartProps) {
@@ -58,17 +67,31 @@ export function EarningsChart({ data, title }: EarningsChartProps) {
         <AppText variant="bodyStrong">{formatCurrency(total)}</AppText>
       </View>
 
-      <View style={styles.bars}>
-        {data.map((day, index) => (
+      {(() => {
+        const scrolls = data.length > SCROLL_FROM_DAYS;
+        const bars = data.map((day, index) => (
           <Bar
             key={day.date}
             day={day}
             index={index}
             ratio={day.amount / max}
             isToday={day.date.slice(0, 10) === todayKey}
+            width={scrolls ? SCROLLED_COLUMN_WIDTH : undefined}
           />
-        ))}
-      </View>
+        ));
+
+        return scrolls ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.bars}
+          >
+            {bars}
+          </ScrollView>
+        ) : (
+          <View style={styles.bars}>{bars}</View>
+        );
+      })()}
     </Surface>
   );
 }
@@ -78,11 +101,14 @@ function Bar({
   index,
   ratio,
   isToday,
+  width,
 }: {
   day: DailyEarnings;
   index: number;
   ratio: number;
   isToday: boolean;
+  /** Задана — столбец фиксированной ширины (режим прокрутки). */
+  width?: number;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -99,7 +125,7 @@ function Bar({
   }));
 
   return (
-    <View style={styles.column}>
+    <View style={[styles.column, width != null && { flex: 0, width }]}>
       <AppText variant="caption" tone={day.amount > 0 ? 'secondary' : 'muted'} numberOfLines={1}>
         {day.amount > 0 ? Math.round(day.amount) : ''}
       </AppText>

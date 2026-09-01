@@ -33,6 +33,14 @@
  *     • подтверждение каждого действия через Alert;
  *     • таймер ожидания клиента и авто-возврат к списку после завершения.
  *
+ *   ПОЧИНЕНО ПО ДОРОГЕ: экран «Заказ завершён» был недостижим. Он показывался
+ *   по условию `order.status === 'completed'`, а сервер завершённые заказы
+ *   не отдаёт вовсе — ни `/orders/current`, ни `/orders/active` (оба
+ *   фильтруют по активным статусам). Водитель нажимал «Завершить» и сразу
+ *   попадал на «Нет активного заказа», не увидев ни суммы, ни подтверждения.
+ *   Теперь экран показывается по ФАКТУ успешного завершения, с суммой из
+ *   ответа сервера.
+ *
  * @dependencies: useActiveOrders, useOrderActions, @/components/ui,
  *                @/components/order/*, @/components/map/OrderMap
  * @created: 2026-03-12 18:00:00
@@ -111,8 +119,15 @@ import type { CurrentOrder, OrderStatus } from '@/types/order';
 const mapAvailable = isEmbeddedMapAvailable();
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
-/** Свёрнутая шторка: полоса этапов, текущая цель, клиент и цена. */
-const SHEET_COLLAPSED = 252;
+/**
+ * Свёрнутая шторка: полоса этапов, текущая цель, клиент и цена.
+ *
+ * Высота с запасом. В худшем случае (адрес в две строки плюс чип подъезда)
+ * содержимое шапки набирает ровно 252px, и строка с «Позвонить» и
+ * «Навигатором» оказалась бы срезана — то есть недоступна, пока шторку не
+ * потянут. Лишнее место внизу не пропадает: в него видно начало маршрута.
+ */
+const SHEET_COLLAPSED = 300;
 /** Развёрнутая — но не во весь экран: карта должна оставаться видимой. */
 const SHEET_EXPANDED = Math.min(Math.max(SCREEN_HEIGHT * 0.66, 420), SCREEN_HEIGHT - 160);
 /** Панель главного действия под шторкой. */
@@ -167,7 +182,14 @@ export default function CurrentOrderScreen() {
   const [waitingSeconds, setWaitingSeconds] = useState(0);
   const waitingTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Авторедирект после завершения
+  /**
+   * Что показать после завершения заказа.
+   *
+   * Держится отдельным состоянием, а не выводится из заказа: завершённого
+   * заказа в ответе сервера уже нет, он исчезает из списка активных в тот
+   * же момент.
+   */
+  const [completed, setCompleted] = useState<{ price: number | null } | null>(null);
   const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
 
   /**
@@ -208,23 +230,25 @@ export default function CurrentOrderScreen() {
 
   // Авторедирект на вкладку «Заказы» после завершения
   useEffect(() => {
-    if (order?.status === 'completed') {
-      const seconds = ORDER_COMPLETE_REDIRECT_MS / 1000;
-      setRedirectCountdown(seconds);
-      const timer = setInterval(() => {
-        setRedirectCountdown((prev) => {
-          if (prev === null || prev <= 1) {
-            clearInterval(timer);
-            router.replace('/(main)/(tabs)/orders');
-            return null;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      return () => clearInterval(timer);
+    if (!completed) {
+      setRedirectCountdown(null);
+      return;
     }
-    setRedirectCountdown(null);
-  }, [order?.status, router]);
+    const seconds = ORDER_COMPLETE_REDIRECT_MS / 1000;
+    setRedirectCountdown(seconds);
+    const timer = setInterval(() => {
+      setRedirectCountdown((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(timer);
+          setCompleted(null);
+          router.replace('/(main)/(tabs)/orders');
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [completed, router]);
 
   const openNavigator = useCallback(
     (lat: number, lng: number) => {
@@ -293,8 +317,17 @@ export default function CurrentOrderScreen() {
           start.mutate(order.id, { onError: (e) => onError(e, 'start') }),
         );
       } else if (order.status === 'in_progress') {
+        const price = order.estimatedPrice;
         runOrderAction('complete', order.id, () =>
-          complete.mutate({ orderId: order.id }, { onError: (e) => onError(e, 'complete') }),
+          complete.mutate(
+            { orderId: order.id },
+            {
+              // Сумму берём из ответа сервера: финальная цена может
+              // отличаться от расчётной (наценки, правки диспетчера).
+              onSuccess: (res) => setCompleted({ price: res.finalPrice ?? price }),
+              onError: (e) => onError(e, 'complete'),
+            },
+          ),
         );
       }
     };
@@ -335,6 +368,17 @@ export default function CurrentOrderScreen() {
     );
   }
 
+  // Показывается ПОСЛЕ завершения, пока идёт обратный отсчёт до возврата
+  // к списку. Стоит выше проверки `!order` намеренно: завершённого заказа
+  // в данных уже нет, и без этого водитель увидел бы «Нет активного заказа».
+  if (completed) {
+    return (
+      <Screen style={styles.centered}>
+        <CompletedCard price={completed.price} countdown={redirectCountdown} />
+      </Screen>
+    );
+  }
+
   if (!order) {
     return (
       <Screen>
@@ -347,16 +391,6 @@ export default function CurrentOrderScreen() {
             onPress: () => router.replace('/(main)/(tabs)/orders'),
           }}
         />
-      </Screen>
-    );
-  }
-
-  // ─── Заказ завершён ──────────────────────────────────────────────────
-
-  if (order.status === 'completed') {
-    return (
-      <Screen style={styles.centered}>
-        <CompletedCard order={order} countdown={redirectCountdown} />
       </Screen>
     );
   }
@@ -693,10 +727,10 @@ function DetailRow({
 
 /** Экран после завершения: сколько заработано и когда вернёмся к списку. */
 function CompletedCard({
-  order,
+  price,
   countdown,
 }: {
-  order: CurrentOrder;
+  price: number | null;
   countdown: number | null;
 }) {
   const { colors } = useTheme();
@@ -715,7 +749,7 @@ function CompletedCard({
         Заказ завершён
       </AppText>
       <AppText variant="display" tone="success" center style={styles.completedPrice}>
-        {formatCurrency(order.estimatedPrice)}
+        {formatCurrency(price)}
       </AppText>
       {countdown != null && (
         <AppText variant="label" tone="muted" center>
