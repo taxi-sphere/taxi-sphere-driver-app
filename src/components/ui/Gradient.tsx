@@ -53,7 +53,11 @@ export function Gradient({
   style,
 }: GradientProps) {
   const theme = useTheme();
-  const id = useId();
+  // `useId()` отдаёт строку вида «:r0:». Двоеточия в идентификаторе SVG,
+  // на который потом ссылаются через `url(#…)`, — источник тихой поломки:
+  // градиент просто не находится и блок остаётся прозрачным. Оставляем
+  // только буквы и цифры, уникальность от этого не страдает.
+  const id = `grad${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
   const [from, to] = colors ?? [theme.colors.primary, theme.colors.primaryDark];
   const v = VECTORS[direction];
 

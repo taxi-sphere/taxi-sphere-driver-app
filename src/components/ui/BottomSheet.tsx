@@ -2,8 +2,8 @@
  * @file: src/components/ui/BottomSheet.tsx
  * @description:
  *   Шторка над содержимым экрана: свёрнута — видна только шапка,
- *   развёрнута — вся начинка. Тянется пальцем, открывается и по нажатию на
- *   полоску-ухват.
+ *   развёрнута — вся начинка. Тянется пальцем за шапку, сворачивается и
+ *   разворачивается нажатием на полоску-ухват.
  *
  *   ЗАЧЕМ. Экран заказа был вертикальной простынёй из восьми карточек: чтобы
  *   увидеть адрес подачи, водителю приходилось скроллить. Шторка убирает
@@ -17,6 +17,12 @@
  *   `GestureHandlerRootView` в корне — добавлен в `app/_layout.tsx`
  *   в v1.5.17, до этого его в приложении не было вовсе.
  *
+ *   НАЖАТИЕ ТОЛЬКО НА УХВАТЕ, а не на всей шапке. В шапке живут кнопки
+ *   («Позвонить», «Навигатор», переключатель заказов), и жест Tap на всём
+ *   блоке срабатывал бы вместе с ними: водитель звонит клиенту — и шторка
+ *   заодно складывается. Протягивание (Pan) на всей шапке безопасно: оно
+ *   требует движения и обычному нажатию не мешает.
+ *
  *   ГЛАВНОЕ ДЕЙСТВИЕ В ШТОРКУ НЕ КЛАДЁТСЯ. Кнопка «Я на месте» должна
  *   оставаться на одном месте в любом положении шторки: водитель жмёт её,
  *   не глядя. Её место — отдельная панель под шторкой.
@@ -25,8 +31,8 @@
  * @created: 2026-09-01 (v1.5.17)
  */
 
-import type { ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useCallback, type ReactNode } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   runOnJS,
@@ -69,11 +75,19 @@ export function BottomSheet({
   const offset = useSharedValue(range);
   const startOffset = useSharedValue(range);
 
-  const snapTo = (expanded: boolean) => {
-    'worklet';
-    offset.value = withSpring(expanded ? 0 : range, spring.gentle);
-    if (onToggle) runOnJS(onToggle)(expanded);
-  };
+  /** Довести шторку до ближайшего положения. Годится и из JS, и из worklet. */
+  const snapTo = useCallback(
+    (expanded: boolean) => {
+      'worklet';
+      offset.value = withSpring(expanded ? 0 : range, spring.gentle);
+      if (onToggle) {
+        // Из worklet колбэк вызывается только через runOnJS; из JS-потока
+        // тот же вызов работает напрямую.
+        runOnJS(onToggle)(expanded);
+      }
+    },
+    [offset, range, onToggle],
+  );
 
   const pan = Gesture.Pan()
     .onStart(() => {
@@ -95,12 +109,6 @@ export function BottomSheet({
       snapTo(expanded);
     });
 
-  const tap = Gesture.Tap().onEnd(() => {
-    snapTo(offset.value > range / 2);
-  });
-
-  const gesture = Gesture.Race(pan, tap);
-
   const sheetStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: offset.value }],
   }));
@@ -119,9 +127,17 @@ export function BottomSheet({
         sheetStyle,
       ]}
     >
-      <GestureDetector gesture={gesture}>
+      <GestureDetector gesture={pan}>
         <View style={styles.headerZone}>
-          <View style={[styles.grabber, { backgroundColor: theme.colors.borderStrong }]} />
+          <Pressable
+            onPress={() => snapTo(offset.value > range / 2)}
+            hitSlop={spacing.md}
+            accessibilityRole="button"
+            accessibilityLabel="Развернуть или свернуть подробности заказа"
+            style={styles.grabberHit}
+          >
+            <View style={[styles.grabber, { backgroundColor: theme.colors.borderStrong }]} />
+          </Pressable>
           {header}
         </View>
       </GestureDetector>
@@ -139,14 +155,18 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   headerZone: {
-    paddingTop: spacing.sm,
+    paddingTop: spacing.xs,
+  },
+  // Полоска тонкая, а нажимать по ней надо пальцем — зона крупнее самой полоски.
+  grabberHit: {
+    alignSelf: 'center',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xxl,
   },
   grabber: {
-    alignSelf: 'center',
     width: 40,
     height: 4,
     borderRadius: 2,
-    marginBottom: spacing.sm,
   },
   body: { flex: 1 },
 });
