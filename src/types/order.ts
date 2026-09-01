@@ -30,6 +30,16 @@ export interface OrderStop {
   note: string | null;
 }
 
+/**
+ * Опция заказа (детское кресло, животное и т.п.) — сервер v1.99.64+.
+ * Названия уже отфильтрованы сервером: скрытые от водителя не приходят,
+ * обезличенные приходят как «Дополнительная опция».
+ */
+export interface OrderOption {
+  id: string;
+  name: string;
+}
+
 /** Заказ из списка доступных (GET /driver/orders/available) */
 export interface AvailableOrder {
   id: string;
@@ -51,6 +61,7 @@ export interface AvailableOrder {
   stopsCount: number;
   stops: OrderStop[];
   distanceToPickup: number | null;
+  options: OrderOption[];
 }
 
 /** Текущий активный заказ (GET /driver/orders/current) */
@@ -81,6 +92,7 @@ export interface CurrentOrder {
   serviceName: string | null;
   tariffName: string | null;
   stops: OrderStop[];
+  options: OrderOption[];
 }
 
 /** Мета-информация из API доступных заказов */

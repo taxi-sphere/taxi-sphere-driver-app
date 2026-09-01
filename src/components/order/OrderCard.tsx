@@ -114,7 +114,7 @@ export const OrderCard = memo(function OrderCard({
           )}
         </View>
 
-        {(order.tariffName || order.paymentMethod) && (
+        {(order.tariffName || order.paymentMethod || order.options?.length) && (
           <View style={styles.tags}>
             {order.tariffName ? <Badge tone="neutral">{order.tariffName}</Badge> : null}
             {order.paymentMethod ? (
@@ -127,6 +127,13 @@ export const OrderCard = memo(function OrderCard({
                 {order.stopsCount === 1 ? '1 остановка' : `${order.stopsCount} остановки`}
               </Badge>
             ) : null}
+            {/* Опции заказа (сервер v1.99.64): детское кресло и прочее водитель
+                должен видеть ДО того, как поехал на подачу. */}
+            {(order.options ?? []).map((option) => (
+              <Badge key={option.id} tone="info">
+                {option.name}
+              </Badge>
+            ))}
           </View>
         )}
       </Surface>

@@ -561,6 +561,15 @@ export default function CurrentOrderScreen() {
               {order.paymentMethod && (
                 <DetailRow label="Оплата" value={PAYMENT_LABEL[order.paymentMethod]} />
               )}
+              {/* Опции заказа (сервер v1.99.64) — водителю важно видеть, что
+                  клиенту обещали детское кресло, а не узнавать об этом на
+                  месте. Скрытые от водителя опции сервер не присылает. */}
+              {(order.options ?? []).length > 0 && (
+                <DetailRow
+                  label="Опции"
+                  value={(order.options ?? []).map((o) => o.name).join(', ')}
+                />
+              )}
               {order.tariffName && <DetailRow label="Тариф" value={order.tariffName} />}
               {order.serviceName && <DetailRow label="Служба" value={order.serviceName} />}
               {order.assignedAt && (

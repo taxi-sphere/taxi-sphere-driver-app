@@ -19,6 +19,19 @@ const orderStopSchema = z.object({
   note: z.string().nullable(),
 });
 
+/**
+ * Опции заказа (детское кресло, животное и т.п.) — сервер v1.99.64+.
+ *
+ * `default([])` обязателен: сборки приложения живут дольше сервера и
+ * наоборот. Названия уже отфильтрованы сервером — скрытые от водителя
+ * опции сюда не попадают, а обезличенные приходят как «Дополнительная
+ * опция».
+ */
+const orderOptionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
 export const availableOrderSchema = z.object({
   id: z.string(),
   orderNumber: z.number(),
@@ -39,6 +52,7 @@ export const availableOrderSchema = z.object({
   stopsCount: z.number(),
   stops: z.array(orderStopSchema).default([]),
   distanceToPickup: z.number().nullable(),
+  options: z.array(orderOptionSchema).default([]),
 });
 
 /**
@@ -115,6 +129,7 @@ export const currentOrderSchema = z.object({
   tariffName: z.string().nullable(),
   // default([]) — защита от отсутствия поля в ответе сервера
   stops: z.array(orderStopSchema).default([]),
+  options: z.array(orderOptionSchema).default([]),
 });
 
 /**
