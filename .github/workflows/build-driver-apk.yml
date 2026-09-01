@@ -1,6 +1,8 @@
 name: Build & release driver APK
 
 # Триггер: push тега вида v1.5.4 или v1.5.4-beta.1.
+# Версия в app.json и package.json обязана совпадать с тегом ПОЛНОСТЬЮ,
+# включая суффикс беты — иначе обновление не покажется (см. шаг 2a).
 # Обычные коммиты — не собираем APK, только релизные теги.
 on:
   push:
@@ -70,6 +72,39 @@ jobs:
           echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
           echo "channel=$CHANNEL"  >> "$GITHUB_OUTPUT"
           echo "🏷  tag=$TAG · version=$VERSION · channel=$CHANNEL"
+
+      # ── 2a. Версия в тегe и в манифестах обязана совпадать ──────────────────
+      # ЗАЧЕМ. Приложение сравнивает версию из ответа сервера со СВОЕЙ
+      # (`Constants.expoConfig.version`). Если собрать тег `v1.5.18-beta.1`
+      # из коммита, где в app.json стоит `1.5.18`, установленная бета
+      # отрапортует «1.5.18» — то есть окажется СТАРШЕ предлагаемой
+      # `1.5.18-beta.1`, и обновление не покажут никогда. Ошибка тихая:
+      # сборка зелёная, APK на месте, а водители обновление не видят.
+      # Дешевле уронить сборку здесь.
+      - name: Тег и версия в app.json должны совпадать
+        run: |
+          APP_VERSION=$(jq -r '.expo.version' app.json)
+          PKG_VERSION=$(jq -r '.version' package.json)
+          TAG_VERSION="${{ steps.parse.outputs.version }}"
+
+          echo "тег:          $TAG_VERSION"
+          echo "app.json:     $APP_VERSION"
+          echo "package.json: $PKG_VERSION"
+
+          FAILED=0
+          if [ "$APP_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::app.json version ($APP_VERSION) не совпадает с тегом ($TAG_VERSION)"
+            FAILED=1
+          fi
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) не совпадает с тегом ($TAG_VERSION)"
+            FAILED=1
+          fi
+          if [ "$FAILED" = "1" ]; then
+            echo "Поправьте версию в манифестах, передвиньте тег и запустите сборку заново."
+            exit 1
+          fi
+          echo "✅ версии совпадают"
 
       # ── 3. Node.js + npm cache ──────────────────────────────────────────────
       - name: Setup Node 22
