@@ -13,28 +13,42 @@
  *   - settings.store
  *   - useAppUpdate
  *   - apk-installer (downloadAndInstallApk)
+ *   v1.5.17: экран переведён на тему и общие компоненты. Отдельная ирония
+ *   прежней версии: именно здесь стоял переключатель тёмной темы — и сам
+ *   этот экран на неё не реагировал, как и остальные шестнадцать.
+ *
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-08-26 (v1.5.7 — dialog обновления с 2 кнопками + сравнение версий)
+ * @updated: 2026-09-01 (v1.5.17 — тема, крупные строки, общие компоненты)
  */
 
 import { useState } from 'react';
 import {
   View,
-  Text,
   Switch,
-  TouchableOpacity,
+  Pressable,
   TextInput,
   StyleSheet,
   ScrollView,
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useSettingsStore } from '@/stores/settings.store';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
 import { useUpdateRequestStore } from '@/stores/update-request.store';
+import { haptics } from '@/lib/haptics';
+import {
+  icon as iconTokens,
+  radius,
+  spacing,
+  text,
+  touch,
+  useTheme,
+  useThemedStyles,
+  type Theme,
+} from '@/lib/theme';
+import { AppText, Button, Divider, Screen, Surface } from '@/components/ui';
 
 type NavigatorApp = 'yandex' | '2gis' | 'google';
 
@@ -44,7 +58,16 @@ const NAVIGATORS: { value: NavigatorApp; label: string }[] = [
   { value: 'google', label: 'Google Maps' },
 ];
 
+/** Варианты темы — подпись и значок для каждого. */
+const THEME_MODES = [
+  { value: 'system', label: 'Авто', icon: 'phone-portrait-outline' },
+  { value: 'light', label: 'Светлая', icon: 'sunny-outline' },
+  { value: 'dark', label: 'Тёмная', icon: 'moon-outline' },
+] as const;
+
 export default function SettingsScreen() {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const {
     serverUrl,
     soundEnabled,
@@ -140,326 +163,262 @@ export default function SettingsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <Screen edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Уведомления */}
-        <Text style={styles.sectionTitle}>Уведомления</Text>
-        <View style={styles.card}>
-          <SettingSwitch
-            label="Звук"
-            value={soundEnabled}
-            onValueChange={setSoundEnabled}
-          />
-          <View style={styles.separator} />
+        <Section title="Уведомления">
+          <SettingSwitch label="Звук" value={soundEnabled} onValueChange={setSoundEnabled} />
+          <Divider />
           <SettingSwitch
             label="Вибрация"
+            hint="Подтверждение нажатий и сигнал о новом заказе"
             value={vibrationEnabled}
             onValueChange={setVibrationEnabled}
           />
-          <View style={styles.separator} />
+          <Divider />
           <SettingSwitch
             label="Голосовые оповещения"
             value={voiceAlerts}
             onValueChange={setVoiceAlerts}
           />
-        </View>
+        </Section>
 
-        {/* Тема оформления */}
-        <Text style={styles.sectionTitle}>Тема оформления</Text>
-        <View style={styles.card}>
+        <Section title="Тема оформления">
           <View style={styles.themeRow}>
-            {(['system', 'light', 'dark'] as const).map((mode) => (
-              <TouchableOpacity
-                key={mode}
-                style={[
-                  styles.themeButton,
-                  { borderColor: themeMode === mode ? '#4f46e5' : '#d1d5db' },
-                  themeMode === mode && { backgroundColor: '#eef2ff' },
-                ]}
-                onPress={() => setThemeMode(mode)}
-              >
-                <Ionicons
-                  name={mode === 'system' ? 'phone-portrait-outline' : mode === 'light' ? 'sunny-outline' : 'moon-outline'}
-                  size={18}
-                  color={themeMode === mode ? '#4f46e5' : '#9ca3af'}
-                />
-                <Text style={[styles.themeText, { color: themeMode === mode ? '#4f46e5' : '#9ca3af' }]}>
-                  {mode === 'system' ? 'Авто' : mode === 'light' ? 'Светлая' : 'Тёмная'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        {/* Навигатор */}
-        <Text style={styles.sectionTitle}>Навигатор</Text>
-        <View style={styles.card}>
-          {NAVIGATORS.map((nav, idx) => (
-            <View key={nav.value}>
-              {idx > 0 && <View style={styles.separator} />}
-              <TouchableOpacity
-                style={styles.radioRow}
-                onPress={() => setPreferredNavigator(nav.value)}
-              >
-                <Text style={styles.radioLabel}>{nav.label}</Text>
-                <View
+            {THEME_MODES.map((mode) => {
+              const active = themeMode === mode.value;
+              return (
+                <Pressable
+                  key={mode.value}
                   style={[
-                    styles.radioOuter,
-                    preferredNavigator === nav.value && styles.radioOuterActive,
+                    styles.themeButton,
+                    {
+                      borderColor: active ? colors.primary : colors.border,
+                      backgroundColor: active ? colors.primarySoft : 'transparent',
+                    },
                   ]}
+                  onPress={() => {
+                    haptics.tap();
+                    setThemeMode(mode.value);
+                  }}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={`Тема: ${mode.label}`}
                 >
-                  {preferredNavigator === nav.value && (
-                    <View style={styles.radioInner} />
-                  )}
-                </View>
-              </TouchableOpacity>
+                  <Ionicons
+                    name={mode.icon}
+                    size={iconTokens.md}
+                    color={active ? colors.primary : colors.textMuted}
+                  />
+                  <AppText
+                    variant="label"
+                    weight={active ? '700' : '500'}
+                    tone={active ? 'brand' : 'muted'}
+                  >
+                    {mode.label}
+                  </AppText>
+                </Pressable>
+              );
+            })}
+          </View>
+        </Section>
+
+        <Section title="Навигатор">
+          {NAVIGATORS.map((nav, index) => (
+            <View key={nav.value}>
+              {index > 0 && <Divider />}
+              <Pressable
+                style={styles.row}
+                onPress={() => {
+                  haptics.tap();
+                  setPreferredNavigator(nav.value);
+                }}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: preferredNavigator === nav.value }}
+                accessibilityLabel={nav.label}
+              >
+                <AppText variant="body">{nav.label}</AppText>
+                <Ionicons
+                  name={
+                    preferredNavigator === nav.value ? 'radio-button-on' : 'radio-button-off'
+                  }
+                  size={iconTokens.lg}
+                  color={preferredNavigator === nav.value ? colors.primary : colors.textMuted}
+                />
+              </Pressable>
             </View>
           ))}
-        </View>
+        </Section>
 
-        {/* Сервер */}
-        <Text style={styles.sectionTitle}>Сервер</Text>
-        <View style={styles.card}>
-          <View style={styles.serverRow}>
-            <Text style={styles.serverHint}>
-              Адрес сервера (оставьте пустым для автоопределения)
-            </Text>
+        <Section title="Сервер">
+          <View style={styles.serverBlock}>
+            <AppText variant="label" tone="muted">
+              Адрес сервера — оставьте пустым для автоопределения
+            </AppText>
             <TextInput
-              style={styles.serverInput}
+              style={styles.input}
               value={serverInput}
               onChangeText={setServerInput}
               placeholder="https://taxitest1.appvault.pro"
-              placeholderTextColor="#9ca3af"
+              placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
+              accessibilityLabel="Адрес сервера"
             />
-            <TouchableOpacity style={styles.serverSaveBtn} onPress={handleSaveServer}>
-              <Text style={styles.serverSaveBtnText}>Сохранить</Text>
-            </TouchableOpacity>
+            <Button onPress={handleSaveServer} variant="secondary" fullWidth>
+              Сохранить
+            </Button>
           </View>
-        </View>
+        </Section>
 
-        {/* О приложении */}
-        <Text style={styles.sectionTitle}>О приложении</Text>
-        <View style={styles.card}>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Версия</Text>
-            <Text style={styles.infoValue}>{Constants.expoConfig?.version ?? '?'}</Text>
-          </View>
-          <View style={styles.separator} />
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Канал обновлений</Text>
-            <Text style={styles.infoValue}>
-              {channel === 'beta' ? 'Beta' : 'Production'}
-            </Text>
-          </View>
-          <View style={styles.separator} />
-          <TouchableOpacity
-            style={styles.infoRow}
+        <Section title="О приложении">
+          <InfoRow label="Версия" value={Constants.expoConfig?.version ?? '?'} />
+          <Divider />
+          <InfoRow label="Канал обновлений" value={channel === 'beta' ? 'Beta' : 'Production'} />
+          <Divider />
+          <Pressable
+            style={styles.row}
             onPress={() => void handleCheckNow()}
             disabled={checking}
+            accessibilityRole="button"
+            accessibilityLabel="Проверить обновления"
           >
-            <Text style={styles.infoLabel}>
-              {checking ? 'Проверка...' : 'Проверить обновления'}
-            </Text>
+            <AppText variant="body" tone="brand">
+              {checking ? 'Проверяю…' : 'Проверить обновления'}
+            </AppText>
             {checking ? (
-              <ActivityIndicator size="small" color="#4f46e5" />
+              <ActivityIndicator size="small" color={colors.primary} />
             ) : (
-              <Ionicons name="refresh" size={18} color="#4f46e5" />
+              <Ionicons name="refresh" size={iconTokens.md} color={colors.primary} />
             )}
-          </TouchableOpacity>
-        </View>
+          </Pressable>
+        </Section>
 
-        {/* Разработчику */}
-        <Text style={styles.sectionTitle}>Разработчику</Text>
-        <View style={styles.card}>
+        <Section title="Разработчику">
           <SettingSwitch
             label="Beta-канал обновлений"
+            hint="Предварительные версии раньше остальных. Могут быть нестабильны."
             value={betaChannel}
             onValueChange={handleBetaToggle}
           />
-        </View>
-        <Text style={styles.hint}>
-          Включив beta-канал, вы будете получать предварительные версии
-          приложения раньше остальных. Могут быть нестабильны.
-        </Text>
+        </Section>
       </ScrollView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
 /* ─── Вспомогательные компоненты ──────────────────────────────────────── */
 
+/** Заголовок раздела плюс карточка с его содержимым. */
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const styles = useThemedStyles(createStyles);
+
+  return (
+    <View style={styles.section}>
+      <AppText variant="overline" tone="muted" style={styles.sectionTitle}>
+        {title}
+      </AppText>
+      <Surface level={1} padded={false} style={styles.card}>
+        {children}
+      </Surface>
+    </View>
+  );
+}
+
 function SettingSwitch({
   label,
+  hint,
   value,
   onValueChange,
 }: {
   label: string;
+  hint?: string;
   value: boolean;
   onValueChange: (v: boolean) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+
   return (
-    <View style={styles.switchRow}>
-      <Text style={styles.switchLabel}>{label}</Text>
+    <View style={styles.row}>
+      <View style={styles.rowText}>
+        <AppText variant="body">{label}</AppText>
+        {hint ? (
+          <AppText variant="caption" tone="muted">
+            {hint}
+          </AppText>
+        ) : null}
+      </View>
       <Switch
         value={value}
-        onValueChange={onValueChange}
-        trackColor={{ false: '#d1d5db', true: '#a5b4fc' }}
-        thumbColor={value ? '#4f46e5' : '#f4f3f4'}
+        onValueChange={(next) => {
+          // Вибрация до записи в стор: иначе выключение «Вибрации» само
+          // себя и заглушит, и подтверждения нажатия водитель не получит.
+          haptics.tap();
+          onValueChange(next);
+        }}
+        trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
+        thumbColor={value ? colors.primary : colors.surface}
+        accessibilityLabel={label}
       />
+    </View>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  const styles = useThemedStyles(createStyles);
+
+  return (
+    <View style={styles.row}>
+      <AppText variant="body" tone="secondary">
+        {label}
+      </AppText>
+      <AppText variant="bodyStrong">{value}</AppText>
     </View>
   );
 }
 
 /* ─── Стили ─────────────────────────────────────────────────────────── */
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f3f4f6',
-  },
-  content: {
-    padding: 16,
-    gap: 8,
-    paddingBottom: 40,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#6b7280',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    paddingHorizontal: 4,
-    marginTop: 8,
-  },
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  separator: {
-    height: 1,
-    backgroundColor: '#f3f4f6',
-    marginHorizontal: 14,
-  },
+const createStyles = (t: Theme) =>
+  StyleSheet.create({
+    content: { padding: spacing.lg, gap: spacing.lg, paddingBottom: spacing.xxxl + spacing.lg },
+    section: { gap: spacing.sm },
+    sectionTitle: { paddingHorizontal: spacing.xs },
+    card: { overflow: 'hidden' },
+    // Минимум 56: строки настроек жмут пальцем, а не курсором.
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.md,
+      minHeight: touch.primary,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+    },
+    rowText: { flex: 1, gap: 2 },
 
-  // Theme
-  themeRow: {
-    flexDirection: 'row',
-    gap: 8,
-    padding: 14,
-  },
-  themeButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1.5,
-  },
-  themeText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
+    themeRow: { flexDirection: 'row', gap: spacing.sm, padding: spacing.md },
+    themeButton: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.xs,
+      paddingVertical: spacing.md,
+      borderRadius: radius.md,
+      borderWidth: 1.5,
+      minHeight: touch.primary,
+    },
 
-  // Switch
-  switchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 14,
-  },
-  switchLabel: {
-    fontSize: 15,
-    color: '#374151',
-  },
-
-  // Radio
-  radioRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 14,
-  },
-  radioLabel: {
-    fontSize: 15,
-    color: '#374151',
-  },
-  radioOuter: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: '#d1d5db',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  radioOuterActive: {
-    borderColor: '#4f46e5',
-  },
-  radioInner: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#4f46e5',
-  },
-
-  // Server
-  serverRow: {
-    padding: 14,
-    gap: 8,
-  },
-  serverHint: {
-    fontSize: 12,
-    color: '#9ca3af',
-  },
-  serverInput: {
-    backgroundColor: '#f3f4f6',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 14,
-    color: '#374151',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  serverSaveBtn: {
-    backgroundColor: '#4f46e5',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  serverSaveBtnText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-
-  // Info
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 14,
-  },
-  infoLabel: {
-    fontSize: 15,
-    color: '#374151',
-  },
-  infoValue: {
-    fontSize: 14,
-    color: '#9ca3af',
-  },
-
-  // Hint (под секцией разработчика)
-  hint: {
-    fontSize: 11,
-    color: '#9ca3af',
-    lineHeight: 15,
-    paddingHorizontal: 4,
-    marginTop: 4,
-  },
-});
+    serverBlock: { padding: spacing.lg, gap: spacing.md },
+    input: {
+      height: 52,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.lg,
+      fontSize: text.body.fontSize,
+      color: t.colors.textPrimary,
+      backgroundColor: t.colors.surfaceSunken,
+    },
+  });

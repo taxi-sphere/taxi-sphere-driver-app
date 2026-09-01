@@ -1,68 +1,76 @@
 /**
  * @file: src/hooks/useCurrentOrder.ts
  * @description:
- *   Hook для получения текущего активного заказа.
- *   Инвалидируется через Socket.IO при изменении статуса.
+ *   Активные заказы водителя. Обычно один; два — когда взят встречный.
+ *
+ *   ИМЯ ФАЙЛА УСТАРЕЛО. Хук называется `useActiveOrders` и отдаёт МАССИВ.
+ *   Переименовать файл не удалось: в окружении, где велась разработка,
+ *   переименование и удаление файлов репозитория запрещены на уровне ОС
+ *   (`git mv` → Permission denied). Файл стоит переименовать в
+ *   `useActiveOrders.ts` при первой возможности — правки в самом коде для
+ *   этого не нужны, только `git mv` и один импорт в `current.tsx`.
+ *
+ *   ЧТО ИЗМЕНИЛОСЬ В v1.5.17. Раньше хук запрашивал `/orders/current`,
+ *   который на сервере сделан через `findFirst` и физически не может
+ *   вернуть больше одного заказа. Правило встречных заказов появилось на
+ *   сервере в v1.99.58, но показать второй заказ водителю было нечем —
+ *   функция не работала от начала до конца.
  *
  *   v1.5.5: подписка на `order:updated` — когда диспетчер поменял
  *   адрес/подъезд/комментарий в админке, водитель видит правки за
- *   <1 сек через сокет вместо ожидания 30-секундного poll'а.
+ *   <1 сек через сокет вместо ожидания 30-секундного poll'а. Сохранена, но
+ *   теперь сверяется со ВСЕМИ активными заказами, а не с одним.
+ *
  * @dependencies: orders.api, react-query, driver.store, socket.service
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-08-26 (v1.5.5 — realtime через order:updated)
+ * @updated: 2026-09-01 (v1.5.17 — список активных заказов вместо одного)
  */
 
+import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getCurrentOrder } from '@/api/orders.api';
+import { getActiveOrders } from '@/api/orders.api';
 import type { CurrentOrder } from '@/types/order';
 import { useDriverStore } from '@/stores/driver.store';
-import { useEffect } from 'react';
 import { socketService } from '@/services/socket.service';
 
-export function useCurrentOrder() {
+export const activeOrdersQueryKey = ['orders', 'active'] as const;
+
+export function useActiveOrders() {
   const status = useDriverStore((s) => s.status);
   const setStatus = useDriverStore((s) => s.setStatus);
   const queryClient = useQueryClient();
 
   const query = useQuery({
-    queryKey: ['orders', 'current'],
-    queryFn: getCurrentOrder,
+    queryKey: activeOrdersQueryKey,
+    queryFn: getActiveOrders,
     staleTime: 5_000,
     gcTime: 60_000,
     refetchInterval: 30_000,
-    placeholderData: (prev: CurrentOrder | null | undefined) => prev,
+    placeholderData: (prev: CurrentOrder[] | undefined) => prev,
   });
 
   // v1.5.5: подписка на socket-события правки заказа. Без этого правка
   // адреса у диспетчера доходила через 30 сек (poll refetchInterval).
   useEffect(() => {
     const unsubscribe = socketService.onOrderUpdated(({ orderId }) => {
-      const current = queryClient.getQueryData<CurrentOrder | null>(['orders', 'current']);
-      // Инвалидируем только если событие про наш текущий заказ.
-      // Иначе бесполезно refetch'ить: диспетчер мог править другой заказ,
-      // не назначенный этому водителю.
-      if (current && orderId === current.id) {
-        void queryClient.invalidateQueries({ queryKey: ['orders', 'current'] });
+      const orders = queryClient.getQueryData<CurrentOrder[]>(activeOrdersQueryKey);
+      // Инвалидируем только если событие про один из НАШИХ заказов.
+      // Иначе бесполезно refetch'ить: диспетчер мог править чужой заказ.
+      if (orders?.some((o) => o.id === orderId)) {
+        void queryClient.invalidateQueries({ queryKey: activeOrdersQueryKey });
       }
     });
     return unsubscribe;
   }, [queryClient]);
 
-  // Синхронизировать статус водителя с текущим заказом
+  // Статус водителя выводится из наличия активных заказов, а не
+  // назначается по месту: при встречном заказе завершение первого не
+  // означает конец работы, и «online» там ставить рано.
   useEffect(() => {
-    if (query.data) {
-      const orderStatus = query.data.status;
-      if (
-        orderStatus === 'assigned' ||
-        orderStatus === 'driver_arrived' ||
-        orderStatus === 'in_progress'
-      ) {
-        if (status !== 'on_order') {
-          setStatus('on_order');
-        }
-      }
+    const hasActive = (query.data?.length ?? 0) > 0;
+    if (hasActive) {
+      if (status !== 'on_order') setStatus('on_order');
     } else if (status === 'on_order') {
-      // Нет активного заказа, но статус on_order — переключить на online
       setStatus('online');
     }
   }, [query.data, status, setStatus]);

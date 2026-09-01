@@ -3,38 +3,56 @@
  * @description:
  *   Модальный экран деталей заказа (из списка доступных).
  *   Показывает подробности заказа и позволяет принять его.
- * @dependencies: useOrderActions, orders.api
+ *
+ *   v1.5.17: переведён на дизайн-систему. Раньше это был третий по счёту
+ *   способ нарисовать одно и то же — свои точки маршрута, своя карточка,
+ *   своя кнопка «ПРИНЯТЬ ЗАКАЗ» зелёного цвета, которого нет больше нигде.
+ *   Теперь маршрут рисует общий `RoutePoints`, а кнопка выглядит как все
+ *   главные кнопки приложения.
+ *
+ * @dependencies: useOrderActions, orders.api, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-09-01 (v1.5.17 — дизайн-система)
  */
 
 import { useState } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { getAvailableOrders, getOrderEtaEstimate } from '@/api/orders.api';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { IncomingOrderModal } from '@/components/IncomingOrderModal';
 import { formatCurrency, formatDistance } from '@/lib/utils';
+import { spacing, touch, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
+import {
+  AppText,
+  Badge,
+  Button,
+  EmptyState,
+  RoutePoints,
+  Screen,
+  Surface,
+  type RoutePoint,
+} from '@/components/ui';
 
 const ACCEPT_TIMER_SEC = 30;
 const DEFAULT_ETA_MIN = 5;
+
+const PAYMENT_LABEL: Record<string, string> = {
+  cash: 'Наличные',
+  card: 'Карта',
+  bonus: 'Бонусы',
+};
 
 export default function OrderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { accept } = useOrderActions();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   // Получаем заказ из кэша доступных заказов
-  const { data: orders } = useQuery({
+  const { data: orders, isLoading } = useQuery({
     queryKey: ['orders', 'available'],
     queryFn: () => getAvailableOrders(),
     staleTime: 10_000,
@@ -53,11 +71,6 @@ export default function OrderDetailScreen() {
     gcTime: 0,
   });
 
-  const handleAccept = () => {
-    if (!order) return;
-    setConfirmOpen(true);
-  };
-
   const handleConfirmAccept = (pickupEtaMin: number) => {
     if (!order) return;
     accept.mutate(
@@ -74,108 +87,92 @@ export default function OrderDetailScreen() {
     setConfirmOpen(false);
   };
 
-  if (!order) {
+  if (isLoading && !order) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color="#4f46e5" />
-          <Text style={styles.loadingText}>Загрузка заказа...</Text>
-        </View>
-      </SafeAreaView>
+      <Screen style={styles.centered}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <AppText variant="label" tone="muted" style={styles.loadingText}>
+          Загружаю заказ…
+        </AppText>
+      </Screen>
     );
   }
 
+  if (!order) {
+    // Заказ мог уйти другому водителю, пока экран открывался.
+    return (
+      <Screen>
+        <EmptyState
+          icon="close-circle-outline"
+          title="Заказ уже забрали"
+          description="Его принял другой водитель или диспетчер отменил заказ"
+          action={{ label: 'К списку', onPress: () => router.back() }}
+        />
+      </Screen>
+    );
+  }
+
+  const points: RoutePoint[] = [
+    { kind: 'pickup', address: order.pickupAddress },
+    ...(order.stops ?? []).map((stop) => ({ kind: 'stop' as const, address: stop.address })),
+    ...(order.dropoffAddress ? [{ kind: 'dropoff' as const, address: order.dropoffAddress }] : []),
+  ];
+
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <Screen edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Шапка */}
         <View style={styles.header}>
-          <Text style={styles.orderNumber}>#{order.orderNumber}</Text>
-          <Text style={styles.price}>
+          <AppText variant="label" tone="muted">
+            № {order.orderNumber}
+          </AppText>
+          <AppText variant="display" tone="success">
             {formatCurrency(order.estimatedPrice)}
-          </Text>
+          </AppText>
         </View>
 
-        {/* Адреса */}
-        <View style={styles.card}>
-          <View style={styles.addressRow}>
-            <View style={[styles.dot, styles.dotGreen]} />
-            <View style={styles.addressContent}>
-              <Text style={styles.addressLabel}>Откуда</Text>
-              <Text style={styles.addressText}>{order.pickupAddress}</Text>
-            </View>
-          </View>
-          {order.dropoffAddress && (
-            <View style={styles.addressRow}>
-              <View style={[styles.dot, styles.dotRed]} />
-              <View style={styles.addressContent}>
-                <Text style={styles.addressLabel}>Куда</Text>
-                <Text style={styles.addressText}>{order.dropoffAddress}</Text>
-              </View>
-            </View>
-          )}
-        </View>
+        <Surface level={1}>
+          <RoutePoints points={points} emphasized />
+        </Surface>
 
-        {/* Детали */}
-        <View style={styles.card}>
+        <Surface level={1} padded={false} style={styles.details}>
           {order.estimatedKm != null && (
-            <DetailRow
-              label="Расстояние маршрута"
-              value={formatDistance(order.estimatedKm)}
-            />
+            <DetailRow label="Расстояние маршрута" value={formatDistance(order.estimatedKm)} />
           )}
           {order.distanceToPickup != null && (
-            <DetailRow
-              label="До точки подачи"
-              value={formatDistance(order.distanceToPickup)}
-            />
+            <DetailRow label="До точки подачи" value={formatDistance(order.distanceToPickup)} />
           )}
           {order.paymentMethod && (
             <DetailRow
               label="Оплата"
-              value={
-                order.paymentMethod === 'cash'
-                  ? 'Наличные'
-                  : order.paymentMethod === 'card'
-                    ? 'Карта'
-                    : 'Бонусы'
-              }
+              value={PAYMENT_LABEL[order.paymentMethod] ?? order.paymentMethod}
             />
           )}
-          {order.tariffName && (
-            <DetailRow label="Тариф" value={order.tariffName} />
-          )}
-          {order.serviceName && (
-            <DetailRow label="Служба" value={order.serviceName} />
-          )}
+          {order.tariffName && <DetailRow label="Тариф" value={order.tariffName} />}
+          {order.serviceName && <DetailRow label="Служба" value={order.serviceName} />}
           {order.stopsCount > 0 && (
-            <DetailRow
-              label="Остановки"
-              value={String(order.stopsCount)}
-            />
+            <DetailRow label="Остановки" value={String(order.stopsCount)} />
           )}
-        </View>
+        </Surface>
 
-        {/* Комментарий */}
-        {order.comment && (
-          <View style={styles.commentCard}>
-            <Text style={styles.commentLabel}>Комментарий</Text>
-            <Text style={styles.commentText}>{order.comment}</Text>
-          </View>
-        )}
+        {order.comment ? (
+          <Surface level={0} style={[styles.comment, { backgroundColor: colors.warningSoft }]}>
+            <Badge tone="warning">Комментарий</Badge>
+            <AppText variant="body" style={styles.commentText}>
+              {order.comment}
+            </AppText>
+          </Surface>
+        ) : null}
       </ScrollView>
 
-      {/* Кнопка принять */}
-      <View style={styles.bottomBar}>
-        <TouchableOpacity
-          style={styles.acceptButton}
-          onPress={handleAccept}
-          disabled={accept.isPending}
+      <View style={[styles.bottomBar, { backgroundColor: colors.surface }]}>
+        <Button
+          onPress={() => setConfirmOpen(true)}
+          size="lg"
+          fullWidth
+          loading={accept.isPending}
         >
-          <Text style={styles.acceptButtonText}>
-            {accept.isPending ? 'Принятие...' : 'ПРИНЯТЬ ЗАКАЗ'}
-          </Text>
-        </TouchableOpacity>
+          ПРИНЯТЬ ЗАКАЗ
+        </Button>
       </View>
 
       <IncomingOrderModal
@@ -189,152 +186,53 @@ export default function OrderDetailScreen() {
         onAccept={handleConfirmAccept}
         onDismiss={handleDismissModal}
       />
-    </SafeAreaView>
+    </Screen>
   );
 }
 
 function DetailRow({ label, value }: { label: string; value: string }) {
+  const styles = useThemedStyles(createStyles);
+
   return (
     <View style={styles.detailRow}>
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value}</Text>
+      <AppText variant="body" tone="muted">
+        {label}
+      </AppText>
+      <AppText variant="bodyStrong">{value}</AppText>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f3f4f6',
-  },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 12,
-  },
-  loadingText: {
-    fontSize: 14,
-    color: '#9ca3af',
-  },
-  content: {
-    padding: 16,
-    gap: 12,
-    paddingBottom: 100,
-  },
-
-  // Header
-  header: {
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  orderNumber: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6b7280',
-  },
-  price: {
-    fontSize: 32,
-    fontWeight: '700',
-    color: '#111827',
-    marginTop: 4,
-  },
-
-  // Card
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 14,
-    gap: 12,
-  },
-
-  // Addresses
-  addressRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginTop: 4,
-  },
-  dotGreen: { backgroundColor: '#22c55e' },
-  dotRed: { backgroundColor: '#ef4444' },
-  addressContent: { flex: 1 },
-  addressLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#9ca3af',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 2,
-  },
-  addressText: {
-    fontSize: 15,
-    color: '#374151',
-  },
-
-  // Details
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  detailLabel: {
-    fontSize: 13,
-    color: '#6b7280',
-  },
-  detailValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
-  },
-
-  // Comment
-  commentCard: {
-    backgroundColor: '#fffbeb',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#fde68a',
-  },
-  commentLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#92400e',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  commentText: {
-    fontSize: 14,
-    color: '#78350f',
-  },
-
-  // Bottom bar
-  bottomBar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 16,
-    paddingBottom: 32,
-    backgroundColor: '#ffffff',
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-  },
-  acceptButton: {
-    backgroundColor: '#059669',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  acceptButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#ffffff',
-    letterSpacing: 0.5,
-  },
-});
+const createStyles = (t: Theme) =>
+  StyleSheet.create({
+    centered: { alignItems: 'center', justifyContent: 'center', gap: spacing.md },
+    loadingText: { marginTop: spacing.xs },
+    // Нижний отступ — под неподвижную панель с кнопкой.
+    content: {
+      padding: spacing.lg,
+      gap: spacing.md,
+      paddingBottom: touch.primary + spacing.xxxl * 2,
+    },
+    header: { alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.sm },
+    details: { paddingHorizontal: spacing.lg },
+    detailRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: spacing.md,
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.border,
+    },
+    comment: { gap: spacing.sm },
+    commentText: { marginTop: spacing.xs },
+    bottomBar: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      padding: spacing.lg,
+      paddingBottom: spacing.xxl,
+      borderTopWidth: 1,
+      borderTopColor: t.colors.border,
+    },
+  });

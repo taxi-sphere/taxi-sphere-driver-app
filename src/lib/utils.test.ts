@@ -23,6 +23,7 @@ import {
   splitAddressEntrance,
   stripSharedCityPrefix,
   pickupEtaStep,
+  formatScheduledAt,
   pickupEtaPresets,
 } from './utils';
 
@@ -225,5 +226,45 @@ describe('pickupEtaPresets — набор под рекомендацию сер
     for (const r of [1, 5, 20, 21, 45, 46, 90, 91, 1440]) {
       expect(pickupEtaPresets(r)).toHaveLength(5);
     }
+  });
+});
+
+/**
+ * Время подачи предзаказа.
+ *
+ * `now` передаётся явно: тест, зависящий от системных часов, ломается сам
+ * по себе один раз в сутки — в полночь.
+ */
+describe('formatScheduledAt', () => {
+  const now = new Date('2026-09-01T12:00:00');
+
+  it('сегодняшний заказ называется «Сегодня»', () => {
+    expect(formatScheduledAt('2026-09-01T18:30:00', now)).toMatch(/^Сегодня 18:30$/);
+  });
+
+  it('завтрашний — «Завтра», даже если до него меньше часа', () => {
+    // 00:30 второго сентября — это завтра, хотя ждать сорок минут.
+    const lateNight = new Date('2026-09-01T23:50:00');
+    expect(formatScheduledAt('2026-09-02T00:30:00', lateNight)).toMatch(/^Завтра 00:30$/);
+  });
+
+  it('дальше двух суток — дата с месяцем', () => {
+    const result = formatScheduledAt('2026-09-12T09:00:00', now);
+    expect(result).toContain('09:00');
+    expect(result).toContain('12');
+    expect(result).not.toContain('Сегодня');
+    expect(result).not.toContain('Завтра');
+  });
+
+  it('прошедшее время не выдаётся за сегодняшнее только из-за разницы в часах', () => {
+    // 20 часов назад — это ВЧЕРА, хотя разница меньше суток.
+    const result = formatScheduledAt('2026-08-31T16:00:00', now);
+    expect(result).not.toContain('Сегодня');
+  });
+
+  it('пустое и битое значение не роняют экран', () => {
+    expect(formatScheduledAt(null, now)).toBe('—');
+    expect(formatScheduledAt(undefined, now)).toBe('—');
+    expect(formatScheduledAt('не дата', now)).toBe('—');
   });
 });

@@ -9,8 +9,10 @@
 
 import { apiGet, apiPost } from './client';
 import {
+  activeOrdersResponseSchema,
   availableOrdersResponseSchema,
   currentOrderResponseSchema,
+  scheduledOrdersResponseSchema,
 } from '@/schemas/order.schema';
 import { driverLogger } from '@/services/logger.service';
 import type {
@@ -45,6 +47,27 @@ export async function getAvailableOrders(params?: {
   return parsed.data;
 }
 
+/**
+ * Предзаказы, назначенные на этого водителя.
+ *
+ * Отдельный эндпоинт, а не фильтр по доступным: предзаказ уже закреплён за
+ * водителем, и в списке свободных заказов ему делать нечего.
+ */
+export async function getScheduledOrders(): Promise<AvailableOrder[]> {
+  const res = await apiGet('driver/orders/scheduled');
+  const parsed = scheduledOrdersResponseSchema.safeParse(res);
+  if (!parsed.success) {
+    driverLogger.error('Schema validation failed: scheduled orders', {
+      stack: String(parsed.error?.message ?? parsed.error),
+      screen: 'orders.api',
+      action: 'parse_scheduled_orders',
+      extra: { issues: parsed.error?.issues },
+    });
+    return [];
+  }
+  return parsed.data.items;
+}
+
 /** Получить текущий активный заказ */
 export async function getCurrentOrder(): Promise<CurrentOrder | null> {
   const res = await apiGet('driver/orders/current');
@@ -60,6 +83,37 @@ export async function getCurrentOrder(): Promise<CurrentOrder | null> {
     return null;
   }
   return parsed.data.order;
+}
+
+/**
+ * ВСЕ активные заказы водителя: обычно один, при встречном — два.
+ *
+ * ЕСТЬ ЗАПАСНОЙ ПУТЬ. Эндпоинт появился на сервере в v1.99.59, а
+ * приложение обновляется независимо и вполне может оказаться новее
+ * сервера. Если `/orders/active` недоступен — берём одиночный
+ * `/orders/current` и оборачиваем в массив: встречный заказ при этом не
+ * покажется, но приложение продолжит работать, а не встретит водителя
+ * пустым экраном.
+ */
+export async function getActiveOrders(): Promise<CurrentOrder[]> {
+  try {
+    const res = await apiGet('driver/orders/active');
+    const parsed = activeOrdersResponseSchema.safeParse(res);
+    if (parsed.success) return parsed.data.items;
+
+    driverLogger.error('Schema validation failed: active orders', {
+      stack: String(parsed.error?.message ?? parsed.error),
+      screen: 'orders.api',
+      action: 'parse_active_orders',
+      extra: { issues: parsed.error?.issues },
+    });
+  } catch {
+    // Старый сервер: молча уходим на /current. Логировать нечего — это
+    // штатная работа со сборкой сервера, где эндпоинта ещё нет.
+  }
+
+  const current = await getCurrentOrder();
+  return current ? [current] : [];
 }
 
 /** Принять заказ с указанием времени подачи в минутах */

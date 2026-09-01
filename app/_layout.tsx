@@ -11,23 +11,39 @@
  *   заказов/карты, чем экономия батареи (батарея сядет быстрее, но
  *   у водителей в такси всегда есть зарядка в машине).
  *   Требует пермишн WAKE_LOCK (уже есть в app.json).
+ *
+ *   v1.5.17: два добавления в корень.
+ *   • `GestureHandlerRootView` — его не было, хотя
+ *     `react-native-gesture-handler` стоял в зависимостях. Без него жесты
+ *     RNGH молча не срабатывают, и всё в приложении приходилось делать на
+ *     `PanResponder`, который считает жест в JS-потоке и заметно отстаёт от
+ *     пальца на загруженном экране (например, поверх карты).
+ *   • Цвет системного фона и стиль статус-бара следуют теме. Без этого при
+ *     переходах между экранами в тёмной теме проступала белая подложка
+ *     нативного контейнера.
+ *
  * @dependencies: AppProviders, expo-splash-screen, expo-status-bar,
- *                expo-keep-awake,
- *                @/services/logger.service, @/components/RootErrorBoundary
+ *                expo-keep-awake, expo-system-ui,
+ *                react-native-gesture-handler,
+ *                @/services/logger.service, @/components/RootErrorBoundary,
+ *                @/lib/theme
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-08-26 (v1.5.5 — useKeepAwake, экран не гаснет)
+ * @updated: 2026-09-01 (v1.5.17 — gesture root, системные цвета по теме)
  */
 
 import { useEffect } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
+import * as SystemUI from 'expo-system-ui';
 import { useKeepAwake } from 'expo-keep-awake';
 import { AppProviders } from '@/providers/AppProviders';
 import { useAuthStore } from '@/stores/auth.store';
 import { RootErrorBoundary } from '@/components/RootErrorBoundary';
 import { AppUpdateNotifier } from '@/components/AppUpdateNotifier';
 import { driverLogger } from '@/services/logger.service';
+import { useTheme } from '@/lib/theme';
 
 // Не скрывать splash до готовности
 SplashScreen.preventAutoHideAsync();
@@ -41,12 +57,14 @@ function installGlobalErrorHandler() {
   void driverLogger.init();
 
   // ErrorUtils — RN API, типов нет, но существует в runtime
-  const errorUtils = (globalThis as unknown as {
-    ErrorUtils?: {
-      getGlobalHandler?: () => (err: Error, isFatal: boolean) => void;
-      setGlobalHandler?: (handler: (err: Error, isFatal: boolean) => void) => void;
-    };
-  }).ErrorUtils;
+  const errorUtils = (
+    globalThis as unknown as {
+      ErrorUtils?: {
+        getGlobalHandler?: () => (err: Error, isFatal: boolean) => void;
+        setGlobalHandler?: (handler: (err: Error, isFatal: boolean) => void) => void;
+      };
+    }
+  ).ErrorUtils;
 
   if (errorUtils?.setGlobalHandler) {
     const previous = errorUtils.getGlobalHandler?.();
@@ -91,25 +109,38 @@ export default function RootLayout() {
   useKeepAwake();
 
   const isReady = useAuthStore((s) => s.isReady);
+  const theme = useTheme();
 
   useEffect(() => {
-    console.log('[RootLayout] isReady:', isReady);
     if (isReady) {
       SplashScreen.hideAsync();
     }
   }, [isReady]);
 
+  // Подложка нативного контейнера. Без неё при переходах между экранами в
+  // тёмной теме на мгновение проступает белый фон.
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(theme.colors.background);
+  }, [theme.colors.background]);
+
   return (
-    <RootErrorBoundary>
-      <AppProviders>
-        <StatusBar style="dark" />
-        <AppUpdateNotifier />
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="(auth)" />
-          <Stack.Screen name="(main)" />
-        </Stack>
-      </AppProviders>
-    </RootErrorBoundary>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <RootErrorBoundary>
+        <AppProviders>
+          <StatusBar style={theme.isDark ? 'light' : 'dark'} />
+          <AppUpdateNotifier />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: theme.colors.background },
+            }}
+          >
+            <Stack.Screen name="index" />
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="(main)" />
+          </Stack>
+        </AppProviders>
+      </RootErrorBoundary>
+    </GestureHandlerRootView>
   );
 }

@@ -1,55 +1,83 @@
 /**
  * @file: app/(main)/(tabs)/orders.tsx
  * @description:
- *   Экран доступных заказов: список заказов с pull-to-refresh.
- *   Статус-бар: Оффлайн / Занят / На линии.
- *   Заказы видны всегда (кроме оффлайн).
- * @dependencies: useAvailableOrders, useDriverStatus, useOrderActions
+ *   Список заказов: свободные и предзаказы — двумя режимами одного экрана.
+ *
+ *   ЧТО ИЗМЕНИЛОСЬ В v1.5.17.
+ *   • Предзаказы переехали сюда из отдельной нижней вкладки, где висела
+ *     заглушка «Здесь будут отображаться заказы». Вкладка занимала одно из
+ *     четырёх мест главной навигации и не делала ничего.
+ *   • Пустой список теперь объясняет ПОЧЕМУ он пуст. Сервер с v1.99.58
+ *     присылает `meta.blockedMessage` («Водитель едет на подачу…»), но
+ *     приложение его не читало — и водитель на подаче видел ровно то же
+ *     «Нет доступных заказов», что и водитель в пустом городе.
+ *   • Состояния «нет связи», «нет GPS» и «ошибка загрузки» приведены к
+ *     одному виду. Раньше это были три разных самодельных баннера.
+ *
+ * @dependencies: useAvailableOrders, useScheduledOrders, useOrderActions,
+ *                @/components/order/OrderCard, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-16 14:00:00
+ * @updated: 2026-09-01 (v1.5.17 — редизайн, предзаказы, причина пустого списка)
  */
 
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
-import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
-  RefreshControl,
-  ActivityIndicator,
-} from 'react-native';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useAvailableOrders } from '@/hooks/useAvailableOrders';
-import { useDriverStatus } from '@/hooks/useDriverStatus';
+import { useScheduledOrders } from '@/hooks/useScheduledOrders';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useConnectionStore } from '@/stores/connection.store';
 import { socketService } from '@/services/socket.service';
-import { formatCurrency, formatDistance } from '@/lib/utils';
-import { IncomingOrderModal } from '@/components/IncomingOrderModal';
 import { getOrderEtaEstimate } from '@/api/orders.api';
+import { IncomingOrderModal } from '@/components/IncomingOrderModal';
+import { OrderCard } from '@/components/order/OrderCard';
+import {
+  AppText,
+  Button,
+  EmptyState,
+  OrderCardSkeleton,
+  Screen,
+  Segmented,
+  StaggerItem,
+  Surface,
+} from '@/components/ui';
+import { icon as iconTokens, spacing, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
 import type { AvailableOrder } from '@/types/order';
 
 const ACCEPT_TIMER_SEC = 30;
 const DEFAULT_ETA_MIN = 5;
 
-const RETRY_INTERVAL = 15; // секунд
+/** Через сколько секунд пробовать переподключиться после обрыва. */
+const RETRY_INTERVAL = 15;
+
+type Tab = 'available' | 'scheduled';
 
 export default function OrdersScreen() {
   const router = useRouter();
-  const { status } = useDriverStatus();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+
+  const [tab, setTab] = useState<Tab>('available');
+
   const { data: orders, isLoading, refetch, meta, error } = useAvailableOrders();
+  const scheduled = useScheduledOrders();
   const { accept } = useOrderActions();
   const socketStatus = useConnectionStore((s) => s.socketStatus);
-
-  const isOnline = status === 'online' || status === 'busy' || status === 'on_order';
   const isDisconnected = socketStatus !== 'connected';
 
   // Таймер авто-переподключения
   const [retryCountdown, setRetryCountdown] = useState(RETRY_INTERVAL);
   const [isRetrying, setIsRetrying] = useState(false);
   const retryTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const handleRetry = useCallback(() => {
+    setIsRetrying(true);
+    socketService.reconnect();
+    setRetryCountdown(RETRY_INTERVAL);
+    setTimeout(() => setIsRetrying(false), 2000);
+  }, []);
 
   useEffect(() => {
     if (!isDisconnected) {
@@ -62,12 +90,10 @@ export default function OrdersScreen() {
       return;
     }
 
-    // Запуск обратного отсчёта
     setRetryCountdown(RETRY_INTERVAL);
     retryTimer.current = setInterval(() => {
       setRetryCountdown((prev) => {
         if (prev <= 1) {
-          // Авто-retry
           handleRetry();
           return RETRY_INTERVAL;
         }
@@ -78,14 +104,7 @@ export default function OrdersScreen() {
     return () => {
       if (retryTimer.current) clearInterval(retryTimer.current);
     };
-  }, [isDisconnected]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleRetry = useCallback(() => {
-    setIsRetrying(true);
-    socketService.reconnect();
-    setRetryCountdown(RETRY_INTERVAL);
-    setTimeout(() => setIsRetrying(false), 2000);
-  }, []);
+  }, [isDisconnected, handleRetry]);
 
   // Выбранный заказ для модалки подтверждения
   const [pendingOrder, setPendingOrder] = useState<AvailableOrder | null>(null);
@@ -128,91 +147,105 @@ export default function OrdersScreen() {
     setPendingOrder(null);
   }, [accept.isPending]);
 
-  const renderOrder = useCallback(({ item }: { item: AvailableOrder }) => (
-    <OrderCard item={item} onAccept={handleAccept} />
-  ), [handleAccept]);
+  const isScheduledTab = tab === 'scheduled';
+  const list = isScheduledTab ? (scheduled.data ?? []) : (orders ?? []);
+  const listLoading = isScheduledTab ? scheduled.isLoading : isLoading;
+  const listError = isScheduledTab ? scheduled.error : error;
+  const reload = isScheduledTab ? scheduled.refetch : refetch;
 
   return (
-    <View style={styles.container}>
-      {/* Блок переподключения */}
-      {isDisconnected && (
-        <View style={styles.retryBlock}>
-          <Text style={styles.retryTitle}>Нет подключения к серверу</Text>
-          <Text style={styles.retryCountdown}>
-            Повторное подключение через {retryCountdown}с
-          </Text>
-          <TouchableOpacity
-            style={[styles.retryButton, isRetrying && styles.retryButtonDisabled]}
-            onPress={handleRetry}
-            disabled={isRetrying}
-            activeOpacity={0.7}
-          >
-            {isRetrying ? (
-              <ActivityIndicator color="#ffffff" size="small" />
-            ) : (
-              <Text style={styles.retryButtonText}>Переподключиться</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* GPS предупреждение */}
-      {!isDisconnected && meta && !meta.hasGps && (
-        <View style={[
-          styles.gpsBanner,
-          meta.showOrdersWithoutGps ? styles.gpsBannerWarn : styles.gpsBannerError,
-        ]}>
-          <Text style={[
-            styles.gpsBannerText,
-            meta.showOrdersWithoutGps ? styles.gpsBannerTextWarn : styles.gpsBannerTextError,
-          ]}>
-            {meta.showOrdersWithoutGps
-              ? 'GPS выключен — заказы показаны без фильтра расстояния'
-              : 'Включите GPS для получения заказов'}
-          </Text>
-        </View>
-      )}
-
-      {/* Ошибка загрузки */}
-      {error && !isDisconnected && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorText}>Ошибка загрузки заказов</Text>
-          <TouchableOpacity onPress={() => void refetch()} activeOpacity={0.7}>
-            <Text style={styles.errorRetry}>Повторить</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Список заказов */}
-      {isDisconnected ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>Вы оффлайн</Text>
-          <Text style={styles.emptySubtitle}>
-            Ожидание подключения к серверу
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={orders}
-          renderItem={renderOrder}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl
-              refreshing={isLoading}
-              onRefresh={() => void refetch()}
-              tintColor="#4f46e5"
-            />
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyTitle}>Нет доступных заказов</Text>
-              <Text style={styles.emptySubtitle}>
-                Новые заказы появятся автоматически
-              </Text>
-            </View>
-          }
+    <Screen>
+      <View style={styles.tabs}>
+        <Segmented<Tab>
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'available', label: 'Свободные', count: orders?.length },
+            { value: 'scheduled', label: 'Предзаказы', count: scheduled.data?.length },
+          ]}
         />
+      </View>
+
+      {/* Нет связи — единственное состояние, которое перекрывает весь экран:
+          без сокета список всё равно не обновляется. */}
+      {isDisconnected ? (
+        <EmptyState
+          icon="cloud-offline-outline"
+          tone="danger"
+          title="Нет связи с сервером"
+          description={`Переподключение через ${retryCountdown} с`}
+          action={{ label: 'Переподключиться', onPress: handleRetry, loading: isRetrying }}
+        />
+      ) : (
+        <>
+          {/* Именно `=== false`: поле необязательное, и «не пришло» —
+              это не «GPS выключен». */}
+          {!isScheduledTab && meta?.hasGps === false && (
+            <Banner
+              tone={meta.showOrdersWithoutGps ? 'warning' : 'danger'}
+              icon="navigate-circle-outline"
+              text={
+                meta.showOrdersWithoutGps
+                  ? 'GPS выключен — заказы показаны без фильтра расстояния'
+                  : 'Включите GPS, иначе заказы не приходят'
+              }
+            />
+          )}
+
+          {listError && (
+            <Banner
+              tone="danger"
+              icon="alert-circle-outline"
+              text="Не удалось загрузить список"
+              action={{ label: 'Повторить', onPress: () => void reload() }}
+            />
+          )}
+
+          {listLoading && list.length === 0 ? (
+            <View style={styles.list}>
+              <OrderCardSkeleton />
+              <OrderCardSkeleton />
+              <OrderCardSkeleton />
+            </View>
+          ) : (
+            <FlatList
+              data={list}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={[styles.list, list.length === 0 && styles.listEmpty]}
+              renderItem={({ item, index }) => (
+                <StaggerItem index={index}>
+                  <OrderCard
+                    order={item}
+                    onPress={handleAccept}
+                    scheduled={isScheduledTab}
+                  />
+                </StaggerItem>
+              )}
+              refreshControl={
+                <RefreshControl
+                  refreshing={listLoading}
+                  onRefresh={() => void reload()}
+                  tintColor={colors.primary}
+                  colors={[colors.primary]}
+                />
+              }
+              ListEmptyComponent={
+                isScheduledTab ? (
+                  <EmptyState
+                    icon="time-outline"
+                    title="Предзаказов нет"
+                    description="Заказы, назначенные вам на определённое время, появятся здесь"
+                  />
+                ) : (
+                  <AvailableEmpty
+                    blockedMessage={meta?.blockedMessage ?? null}
+                    onGoToOrder={() => router.replace('/(main)/(tabs)/current')}
+                  />
+                )
+              }
+            />
+          )}
+        </>
       )}
 
       <IncomingOrderModal
@@ -226,224 +259,91 @@ export default function OrdersScreen() {
         onAccept={handleConfirmAccept}
         onDismiss={handleDismissModal}
       />
-    </View>
+    </Screen>
   );
 }
 
-/** Мемоизированная карточка заказа */
-const OrderCard = memo(function OrderCard({
-  item,
-  onAccept,
+/**
+ * Пустой список свободных заказов.
+ *
+ * Два принципиально разных случая под одним заголовком «пусто» — самая
+ * частая причина, по которой водитель звонит диспетчеру. Если сервер
+ * прислал причину (`blockedMessage` — правило одного активного заказа,
+ * v1.99.58), показываем именно её и ведём туда, где заказ уже есть.
+ */
+function AvailableEmpty({
+  blockedMessage,
+  onGoToOrder,
 }: {
-  item: AvailableOrder;
-  onAccept: (order: AvailableOrder) => void;
+  blockedMessage: string | null;
+  onGoToOrder: () => void;
 }) {
+  if (blockedMessage) {
+    return (
+      <EmptyState
+        icon="car"
+        tone="warning"
+        title="Сейчас новых заказов не даём"
+        description={blockedMessage}
+        action={{ label: 'К текущему заказу', onPress: onGoToOrder }}
+      />
+    );
+  }
+
   return (
-    <TouchableOpacity
-      style={cardStyles.orderCard}
-      onPress={() => onAccept(item)}
-      activeOpacity={0.7}
-    >
-      <View style={cardStyles.orderHeader}>
-        <Text style={cardStyles.orderNumber}>#{item.orderNumber}</Text>
-        <Text style={cardStyles.orderPrice}>
-          {formatCurrency(item.estimatedPrice)}
-        </Text>
-      </View>
-      <View style={cardStyles.orderAddresses}>
-        <View style={cardStyles.addressRow}>
-          <View style={[cardStyles.dot, cardStyles.dotGreen]} />
-          <Text style={cardStyles.addressText} numberOfLines={1}>
-            {item.pickupAddress}
-          </Text>
-        </View>
-        {(item.stops ?? []).map((stop, i) => (
-          <View key={i} style={cardStyles.addressRow}>
-            <View style={[cardStyles.dot, cardStyles.dotYellow]} />
-            <Text style={cardStyles.addressTextStop} numberOfLines={1}>
-              {stop.address}
-            </Text>
-          </View>
-        ))}
-        {item.dropoffAddress && (
-          <View style={cardStyles.addressRow}>
-            <View style={[cardStyles.dot, cardStyles.dotRed]} />
-            <Text style={cardStyles.addressText} numberOfLines={1}>
-              {item.dropoffAddress}
-            </Text>
-          </View>
-        )}
-      </View>
-      <View style={cardStyles.orderFooter}>
-        {item.distanceToPickup != null && (
-          <Text style={cardStyles.orderMeta}>
-            Подача: {formatDistance(item.distanceToPickup)}
-          </Text>
-        )}
-        {item.estimatedKm != null && (
-          <Text style={cardStyles.orderMeta}>
-            Маршрут: {formatDistance(item.estimatedKm)}
-          </Text>
-        )}
-        {item.tariffName && (
-          <View style={cardStyles.tariffBadge}>
-            <Text style={cardStyles.tariffText}>{item.tariffName}</Text>
-          </View>
-        )}
-      </View>
-    </TouchableOpacity>
+    <EmptyState
+      icon="search-outline"
+      title="Свободных заказов нет"
+      description="Новые появятся здесь автоматически, обновлять вручную не нужно"
+    />
   );
-});
+}
 
-const cardStyles = StyleSheet.create({
-  orderCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
-    marginBottom: 8,
-  },
-  orderHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  orderNumber: { fontSize: 13, fontWeight: '600', color: '#6b7280' },
-  orderPrice: { fontSize: 18, fontWeight: '700', color: '#111827' },
-  orderAddresses: { gap: 4, marginBottom: 8 },
-  addressRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dot: { width: 8, height: 8, borderRadius: 4 },
-  dotGreen: { backgroundColor: '#22c55e' },
-  dotYellow: { backgroundColor: '#f59e0b' },
-  dotRed: { backgroundColor: '#ef4444' },
-  addressText: { fontSize: 14, color: '#374151', flex: 1 },
-  addressTextStop: { fontSize: 13, color: '#6b7280', flex: 1 },
-  orderFooter: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  orderMeta: { fontSize: 12, color: '#9ca3af' },
-  tariffBadge: {
-    backgroundColor: '#ede9fe',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginLeft: 'auto',
-  },
-  tariffText: { fontSize: 11, color: '#7c3aed', fontWeight: '600' },
-});
+/** Узкая плашка над списком: предупреждение или ошибка. */
+function Banner({
+  tone,
+  icon,
+  text,
+  action,
+}: {
+  tone: 'warning' | 'danger';
+  icon: keyof typeof Ionicons.glyphMap;
+  text: string;
+  action?: { label: string; onPress: () => void };
+}) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+  const accent = tone === 'danger' ? colors.danger : colors.warning;
+  const background = tone === 'danger' ? colors.dangerSoft : colors.warningSoft;
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f3f4f6',
-  },
-  list: {
-    padding: 12,
-    gap: 8,
-  },
-  // Error banner
-  errorBanner: {
-    marginHorizontal: 12,
-    marginTop: 8,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    backgroundColor: '#fef2f2',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  errorText: { fontSize: 13, color: '#991b1b', fontWeight: '500' },
-  errorRetry: { fontSize: 13, color: '#4f46e5', fontWeight: '600' },
+  return (
+    <Surface level={0} padded={false} style={[styles.banner, { backgroundColor: background }]}>
+      <Ionicons name={icon} size={iconTokens.md} color={accent} />
+      <AppText variant="label" style={{ color: accent, flex: 1 }}>
+        {text}
+      </AppText>
+      {action && (
+        <Button onPress={action.onPress} variant="ghost" size="sm">
+          {action.label}
+        </Button>
+      )}
+    </Surface>
+  );
+}
 
-  // Retry block
-  retryBlock: {
-    backgroundColor: '#fef2f2',
-    marginHorizontal: 12,
-    marginTop: 12,
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-  },
-  retryTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#991b1b',
-    marginBottom: 4,
-  },
-  retryCountdown: {
-    fontSize: 13,
-    color: '#b91c1c',
-    marginBottom: 12,
-  },
-  retryButton: {
-    backgroundColor: '#4f46e5',
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    borderRadius: 8,
-    minWidth: 180,
-    alignItems: 'center',
-  },
-  retryButtonDisabled: {
-    opacity: 0.6,
-  },
-  retryButtonText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-
-  // GPS banner
-  gpsBanner: {
-    marginHorizontal: 12,
-    marginTop: 8,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderWidth: 1,
-  },
-  gpsBannerWarn: {
-    backgroundColor: '#fefce8',
-    borderColor: '#fde68a',
-  },
-  gpsBannerError: {
-    backgroundColor: '#fef2f2',
-    borderColor: '#fecaca',
-  },
-  gpsBannerText: {
-    fontSize: 13,
-    fontWeight: '500' as const,
-    textAlign: 'center' as const,
-  },
-  gpsBannerTextWarn: {
-    color: '#92400e',
-  },
-  gpsBannerTextError: {
-    color: '#991b1b',
-  },
-
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 32,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: '#9ca3af',
-    marginTop: 8,
-    textAlign: 'center',
-  },
-});
+const createStyles = (_t: Theme) =>
+  StyleSheet.create({
+    tabs: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.sm },
+    list: { padding: spacing.lg, paddingTop: spacing.sm, gap: spacing.md },
+    // Без этого пустое состояние прижимается к верху вместо центра списка.
+    listEmpty: { flexGrow: 1 },
+    banner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+    },
+  });

@@ -1,106 +1,113 @@
 /**
  * @file: src/lib/theme.ts
  * @description:
- *   Система цветовых тем: светлая и тёмная.
- *   Хук useTheme() для получения текущей палитры.
+ *   Точка входа в дизайн-систему: текущая тема и хук для стилей, зависящих
+ *   от неё.
+ *
+ *   ГЛАВНОЕ ЗДЕСЬ — `useThemedStyles`. `StyleSheet.create` статичен и хуки
+ *   вызывать не может, поэтому до v1.5.17 экран, которому нужны были цвета
+ *   темы, либо размазывал `{ color: colors.x }` по всей разметке (так
+ *   сделан `profile.tsx` — единственный экран, знавший про тему), либо
+ *   просто хардкодил цвета (так сделаны остальные шестнадцать).
+ *
+ *   `useThemedStyles` принимает фабрику стилей и отдаёт готовый
+ *   `StyleSheet`, пересобирая его только при смене темы. Разметка при этом
+ *   выглядит как обычно — `style={styles.card}`, без цветов по месту.
+ *
+ *   Фабрику ОБЪЯВЛЯТЬ НА УРОВНЕ МОДУЛЯ, не внутри компонента: кеш держится
+ *   по ссылке на функцию, и новая функция на каждый рендер сделает кеш
+ *   бесполезным.
+ *
+ *     const styles = useThemedStyles(createStyles);
+ *     // ...
+ *     const createStyles = (t: Theme) => StyleSheet.create({ ... });
+ *
+ * @dependencies:
+ *   - react-native (useColorScheme, StyleSheet)
+ *   - @/stores/settings.store
+ *   - ./design/palette, ./design/tokens
+ * @created: 2026-01-24 12:00:00
+ * @updated: 2026-09-01 (v1.5.17 — токены, useThemedStyles, тема на всех экранах)
  */
 
-import { useColorScheme } from 'react-native';
+import { useMemo } from 'react';
+import {
+  StyleSheet,
+  useColorScheme,
+  type ImageStyle,
+  type TextStyle,
+  type ViewStyle,
+} from 'react-native';
 import { useSettingsStore } from '@/stores/settings.store';
+import { THEMES, type Theme, type ThemeColors } from './design/palette';
 
-export interface ThemeColors {
-  // Фоны
-  background: string;
-  surface: string;
-  surfaceElevated: string;
-  // Текст
-  textPrimary: string;
-  textSecondary: string;
-  textMuted: string;
-  textInverse: string;
-  // Бренд
-  primary: string;
-  primaryDark: string;
-  primaryLight: string;
-  // Статусы
-  success: string;
-  warning: string;
-  danger: string;
-  info: string;
-  // Границы
-  border: string;
-  borderLight: string;
-  // Специальные
-  overlay: string;
-  cardBg: string;
-  inputBg: string;
-  tabBarBg: string;
-  statusBarStyle: 'light-content' | 'dark-content';
-}
-
-const lightTheme: ThemeColors = {
-  background: '#f3f4f6',
-  surface: '#ffffff',
-  surfaceElevated: '#ffffff',
-  textPrimary: '#111827',
-  textSecondary: '#374151',
-  textMuted: '#9ca3af',
-  textInverse: '#ffffff',
-  primary: '#4f46e5',
-  primaryDark: '#4338ca',
-  primaryLight: '#e0e7ff',
-  success: '#16a34a',
-  warning: '#f59e0b',
-  danger: '#ef4444',
-  info: '#3b82f6',
-  border: '#e5e7eb',
-  borderLight: '#f0f0f0',
-  overlay: 'rgba(0, 0, 0, 0.5)',
-  cardBg: '#ffffff',
-  inputBg: '#f9fafb',
-  tabBarBg: '#ffffff',
-  statusBarStyle: 'dark-content',
-};
-
-const darkTheme: ThemeColors = {
-  background: '#0f172a',
-  surface: '#1e293b',
-  surfaceElevated: '#334155',
-  textPrimary: '#f1f5f9',
-  textSecondary: '#cbd5e1',
-  textMuted: '#64748b',
-  textInverse: '#0f172a',
-  primary: '#6366f1',
-  primaryDark: '#4f46e5',
-  primaryLight: '#312e81',
-  success: '#22c55e',
-  warning: '#f59e0b',
-  danger: '#f87171',
-  info: '#60a5fa',
-  border: '#334155',
-  borderLight: '#1e293b',
-  overlay: 'rgba(0, 0, 0, 0.7)',
-  cardBg: '#1e293b',
-  inputBg: '#0f172a',
-  tabBarBg: '#1e293b',
-  statusBarStyle: 'light-content',
-};
+export type { Theme, ThemeColors, ElevationLevel } from './design/palette';
+export {
+  text,
+  spacing,
+  radius,
+  touch,
+  icon,
+  border,
+  motion,
+  MAX_STAGGER_ITEMS,
+} from './design/tokens';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 /**
- * Хук для получения текущей палитры цветов.
- * Учитывает пользовательскую настройку и системную тему.
+ * Текущая тема.
+ *
+ * `system` опирается на `useColorScheme()`. Учтите: это работает только
+ * пока в `app.json` стоит `userInterfaceStyle: "automatic"` — со значением
+ * `"light"` нативная оболочка возвращает `light` всегда, и режим «Авто»
+ * молча превращается в «Светлая» (так и было до v1.5.17).
  */
-export function useTheme(): { colors: ThemeColors; isDark: boolean; mode: ThemeMode } {
-  const themeMode = useSettingsStore((s) => s.themeMode ?? 'system');
+export function useTheme(): Theme & { mode: ThemeMode } {
+  const mode = useSettingsStore((s) => s.themeMode ?? 'system');
   const systemScheme = useColorScheme();
 
-  const isDark = themeMode === 'dark' || (themeMode === 'system' && systemScheme === 'dark');
+  const isDark = mode === 'dark' || (mode === 'system' && systemScheme === 'dark');
+  const theme = isDark ? THEMES.dark : THEMES.light;
 
-  return {
-    colors: isDark ? darkTheme : lightTheme,
-    isDark,
-    mode: themeMode,
-  };
+  return useMemo(() => ({ ...theme, mode }), [theme, mode]);
+}
+
+type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
+
+type StyleFactory<T> = (theme: Theme) => T;
+
+/**
+ * Кеш готовых `StyleSheet` по паре (фабрика, тема).
+ *
+ * `WeakMap` — чтобы стили экрана уходили вместе с выгруженным модулем и не
+ * держали память. Обе темы считаются лениво: тёмная не собирается, пока
+ * водитель её не включил.
+ */
+const styleCache = new WeakMap<
+  StyleFactory<unknown>,
+  Partial<Record<'light' | 'dark', unknown>>
+>();
+
+export function useThemedStyles<T extends NamedStyles<T>>(factory: StyleFactory<T>): T {
+  const theme = useTheme();
+  const key: 'light' | 'dark' = theme.isDark ? 'dark' : 'light';
+
+  let byTheme = styleCache.get(factory as StyleFactory<unknown>);
+  if (!byTheme) {
+    byTheme = {};
+    styleCache.set(factory as StyleFactory<unknown>, byTheme);
+  }
+  if (!byTheme[key]) {
+    byTheme[key] = StyleSheet.create(factory(theme));
+  }
+  return byTheme[key] as T;
+}
+
+/**
+ * Только палитра — для случаев, где стили не нужны, а цвет нужен: проп
+ * `color` у иконки, `tintColor` у `RefreshControl`, цвет маркера на карте.
+ */
+export function useColors(): ThemeColors {
+  return useTheme().colors;
 }

@@ -19,6 +19,14 @@ export interface RecentOrder {
   paymentMethod: string;
 }
 
+/** Заработок за один день — для столбчатого графика. */
+export interface DailyEarnings {
+  /** Дата в формате YYYY-MM-DD. */
+  date: string;
+  amount: number;
+  trips: number;
+}
+
 /** Ответ GET /driver/earnings */
 export interface EarningsResponse {
   period: {
@@ -34,4 +42,13 @@ export interface EarningsResponse {
     rating: number;
   };
   recentOrders: RecentOrder[];
+  /**
+   * Разбивка по дням за запрошенный период.
+   *
+   * Появилось на сервере в v1.99.59. Поле необязательное: приложение
+   * новее сервера не должно падать, а старое — ломаться от лишнего поля.
+   * Пока сервер не обновлён, график просто не показывается — это честнее,
+   * чем то, что было до v1.5.17: график рисовался по `Math.random()`.
+   */
+  daily?: DailyEarnings[] | null;
 }

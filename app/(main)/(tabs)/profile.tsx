@@ -12,7 +12,6 @@
 import {
   View,
   Text,
-  TouchableOpacity,
   StyleSheet,
   ScrollView,
   RefreshControl,
@@ -28,11 +27,12 @@ import { useLogout } from '@/hooks/useAuth';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
 import { formatCurrency } from '@/lib/utils';
 import { useTheme, type ThemeColors } from '@/lib/theme';
-import { FadeIn, ScalePress } from '@/components/ui';
+import { FadeIn, Gradient, ScalePress } from '@/components/ui';
+import { radius } from '@/lib/theme';
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { status } = useDriverStatus();
   const logout = useLogout();
 
@@ -92,7 +92,10 @@ export default function ProfileScreen() {
         {/* Статистика */}
         {profile && (
           <FadeIn delay={100}>
-            <View style={[styles.statsCard, { backgroundColor: colors.primary }]}>
+            {/* Градиент вместо плоской заливки: карточка со статистикой —
+                единственный акцентный блок экрана, и он должен выглядеть
+                намеренно, а не как прямоугольник бренд-цвета. */}
+            <Gradient radius={radius.lg} style={styles.statsCard}>
               <View style={styles.statItem}>
                 <Text style={styles.statValueWhite}>{formatCurrency(profile.balance)}</Text>
                 <Text style={styles.statLabelWhite}>Баланс</Text>
@@ -110,13 +113,13 @@ export default function ProfileScreen() {
                 <Text style={styles.statValueWhite}>{profile.totalTrips}</Text>
                 <Text style={styles.statLabelWhite}>Поездки</Text>
               </View>
-            </View>
+            </Gradient>
           </FadeIn>
         )}
 
         {/* Статус и Активность */}
         <FadeIn delay={200}>
-          <View style={[styles.infoCard, { backgroundColor: colors.cardBg }]}>
+          <View style={[styles.infoCard, { backgroundColor: colors.surface }]}>
             <InfoRow
               label="Статус"
               value={status === 'online' ? 'На линии' : status === 'on_order' ? 'На заказе' : status === 'busy' ? 'Занят' : 'Оффлайн'}
@@ -141,7 +144,7 @@ export default function ProfileScreen() {
         {/* Автомобиль */}
         {vehicleInfo && (
           <FadeIn delay={300}>
-            <View style={[styles.infoCard, { backgroundColor: colors.cardBg }]}>
+            <View style={[styles.infoCard, { backgroundColor: colors.surface }]}>
               <Text style={[styles.cardTitle, { color: colors.textSecondary }]}>
                 <Ionicons name="car-outline" size={14} color={colors.textSecondary} /> Автомобиль
               </Text>
@@ -155,7 +158,7 @@ export default function ProfileScreen() {
         {/* Настройки */}
         <FadeIn delay={400}>
           <ScalePress onPress={() => router.push('/(main)/settings')}>
-            <View style={[styles.actionRow, { backgroundColor: colors.cardBg }]}>
+            <View style={[styles.actionRow, { backgroundColor: colors.surface }]}>
               <View style={styles.actionLeft}>
                 <Ionicons name="settings-outline" size={18} color={colors.textSecondary} />
                 <Text style={[styles.actionText, { color: colors.textSecondary }]}>Настройки</Text>

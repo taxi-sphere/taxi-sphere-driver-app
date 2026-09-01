@@ -33,4 +33,17 @@ export const earningsResponseSchema = z.object({
       paymentMethod: z.string(),
     }),
   ),
+  /**
+   * Разбивка по дням (сервер v1.99.59+). `nullish` — чтобы приложение
+   * работало и со старым сервером, где поля ещё нет.
+   */
+  daily: z
+    .array(
+      z.object({
+        date: z.string(),
+        amount: z.number(),
+        trips: z.number(),
+      }),
+    )
+    .nullish(),
 });

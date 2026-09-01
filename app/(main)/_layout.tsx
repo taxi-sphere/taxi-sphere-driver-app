@@ -3,29 +3,23 @@
  * @description:
  *   Layout основного стека. Проверяет подключение к серверу.
  *   Если сервер недоступен — показывает экран "Нет подключения".
- * @dependencies: expo-router, connection.store, settings.store
+ * @dependencies: expo-router, connection.store, settings.store,
+ *                @/lib/theme, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-04-02 04:00:00
+ * @updated: 2026-09-01 (v1.5.17 - tema)
  */
 
 import { useEffect, useCallback, useState } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  TextInput,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-} from 'react-native';
-import { Stack, useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, TextInput, StyleSheet, Alert } from 'react-native';
+import { Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useConnectionStore } from '@/stores/connection.store';
 import { useSettingsStore } from '@/stores/settings.store';
 import { useAuthStore } from '@/stores/auth.store';
 import { getApiUrl } from '@/lib/constants';
+import { icon, radius, spacing, text, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
+import { AppText, Button, Screen } from '@/components/ui';
 
 export default function MainLayout() {
   const isServerReachable = useConnectionStore((s) => s.isServerReachable);
@@ -68,8 +62,29 @@ export default function MainLayout() {
     return <NoConnectionScreen onRetry={checkServer} checking={checking} />;
   }
 
+  return <MainStack />;
+}
+
+/**
+ * Стек основных экранов.
+ *
+ * Вынесен из `MainLayout`, чтобы `useTheme` не вызывался до проверки
+ * доступности сервера: при недоступном сервере рендерится совсем другое
+ * дерево, и хук в общей ветке нарушил бы порядок вызовов.
+ */
+function MainStack() {
+  const { colors } = useTheme();
+
   return (
-    <Stack screenOptions={{ headerShown: false }}>
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: colors.background },
+        headerStyle: { backgroundColor: colors.surface },
+        headerTintColor: colors.textPrimary,
+        headerTitleStyle: { color: colors.textPrimary, fontSize: text.heading.fontSize },
+      }}
+    >
       <Stack.Screen name="(tabs)" />
       <Stack.Screen
         name="order/[id]"
@@ -92,16 +107,32 @@ export default function MainLayout() {
           headerShown: false,
         }}
       />
+      <Stack.Screen
+        name="payout/index"
+        options={{
+          headerShown: true,
+          headerTitle: 'Вывод средств',
+        }}
+      />
     </Stack>
   );
 }
 
+/**
+ * Экран «сервер недоступен».
+ *
+ * Здесь же — единственное место, где водитель может поменять адрес сервера,
+ * не заходя в настройки: если сервер не отвечает, до настроек он и не
+ * доберётся.
+ */
 function NoConnectionScreen({ onRetry, checking }: { onRetry: () => void; checking: boolean }) {
   const { serverUrl, setServerUrl } = useSettingsStore();
   const logout = useAuthStore((s) => s.logout);
   const [serverInput, setServerInput] = useState(serverUrl);
   const [showSettings, setShowSettings] = useState(false);
   const appVersion = Constants.expoConfig?.version ?? '?';
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const handleSave = () => {
     const url = serverInput.trim().replace(/\/$/, '');
@@ -119,174 +150,110 @@ function NoConnectionScreen({ onRetry, checking }: { onRetry: () => void; checki
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <Screen edges={['top', 'bottom']}>
       <View style={styles.content}>
-        <Ionicons name="cloud-offline-outline" size={64} color="#d1d5db" />
-        <Text style={styles.title}>Нет подключения к серверу</Text>
-        <Text style={styles.subtitle}>
+        <View style={styles.iconWell}>
+          <Ionicons name="cloud-offline-outline" size={icon.xxl} color={colors.textMuted} />
+        </View>
+
+        <AppText variant="heading" center style={styles.title}>
+          Нет подключения к серверу
+        </AppText>
+        <AppText variant="body" tone="muted" center style={styles.subtitle}>
           Проверьте интернет-соединение или настройки сервера
-        </Text>
+        </AppText>
 
-        <TouchableOpacity
-          style={styles.retryButton}
+        <Button
           onPress={onRetry}
-          disabled={checking}
+          loading={checking}
+          icon="refresh"
+          size="lg"
+          style={styles.retryButton}
         >
-          {checking ? (
-            <ActivityIndicator color="#ffffff" size="small" />
-          ) : (
-            <>
-              <Ionicons name="refresh" size={18} color="#ffffff" />
-              <Text style={styles.retryText}>Повторить</Text>
-            </>
-          )}
-        </TouchableOpacity>
+          Повторить
+        </Button>
 
-        {/* Выход из аккаунта */}
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={18} color="#ef4444" />
-          <Text style={styles.logoutText}>Выйти из аккаунта</Text>
-        </TouchableOpacity>
+        <Button onPress={handleLogout} variant="ghost" icon="log-out-outline" style={styles.logout}>
+          Выйти из аккаунта
+        </Button>
 
-        <TouchableOpacity
-          style={styles.settingsToggle}
+        <Button
           onPress={() => setShowSettings(!showSettings)}
+          variant="ghost"
+          size="sm"
+          icon={showSettings ? 'chevron-up' : 'settings-outline'}
         >
-          <Ionicons name="settings-outline" size={16} color="#6b7280" />
-          <Text style={styles.settingsToggleText}>Настройки сервера</Text>
-        </TouchableOpacity>
+          Настройки сервера
+        </Button>
 
         {showSettings && (
           <View style={styles.settingsSection}>
-            <Text style={styles.settingsHint}>
+            <AppText variant="caption" tone="muted" center>
               Текущий: {serverUrl || 'автоопределение'}
-            </Text>
+            </AppText>
             <TextInput
               style={styles.serverInput}
               value={serverInput}
               onChangeText={setServerInput}
               placeholder="https://taxitest1.appvault.pro"
-              placeholderTextColor="#9ca3af"
+              placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
             />
-            <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-              <Text style={styles.saveButtonText}>Сохранить и подключиться</Text>
-            </TouchableOpacity>
+            <Button onPress={handleSave} variant="secondary" fullWidth>
+              Сохранить и подключиться
+            </Button>
           </View>
         )}
 
-        {/* Версия приложения */}
-        <Text style={styles.versionText}>v{appVersion}</Text>
+        <AppText variant="caption" tone="muted" style={styles.versionText}>
+          v{appVersion}
+        </AppText>
       </View>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f9fafb',
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 32,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#374151',
-    marginTop: 20,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#9ca3af',
-    marginTop: 8,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  retryButton: {
-    backgroundColor: '#4f46e5',
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 32,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 32,
-  },
-  retryText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  settingsToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 24,
-    padding: 8,
-  },
-  settingsToggleText: {
-    fontSize: 14,
-    color: '#6b7280',
-  },
-  settingsSection: {
-    width: '100%',
-    marginTop: 12,
-    gap: 8,
-  },
-  settingsHint: {
-    fontSize: 12,
-    color: '#9ca3af',
-    textAlign: 'center',
-  },
-  serverInput: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: '#374151',
-    backgroundColor: '#ffffff',
-  },
-  saveButton: {
-    backgroundColor: '#6b7280',
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  saveButtonText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 20,
-    padding: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#fecaca',
-    backgroundColor: '#fef2f2',
-    paddingHorizontal: 24,
-  },
-  logoutText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#ef4444',
-  },
-  versionText: {
-    position: 'absolute',
-    bottom: 20,
-    fontSize: 12,
-    color: '#d1d5db',
-  },
-});
+const createStyles = (t: Theme) =>
+  StyleSheet.create({
+    content: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: spacing.xxxl,
+      gap: spacing.sm,
+    },
+    iconWell: {
+      width: 96,
+      height: 96,
+      borderRadius: 48,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: t.colors.surfaceSunken,
+      marginBottom: spacing.lg,
+    },
+    title: { marginTop: spacing.xs },
+    subtitle: { marginBottom: spacing.lg },
+    retryButton: { minWidth: 220 },
+    logout: { marginTop: spacing.xs },
+    settingsSection: {
+      width: '100%',
+      marginTop: spacing.md,
+      gap: spacing.sm,
+    },
+    serverInput: {
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+      fontSize: text.body.fontSize,
+      color: t.colors.textPrimary,
+      backgroundColor: t.colors.surface,
+    },
+    versionText: {
+      position: 'absolute',
+      bottom: spacing.xl,
+    },
+  });

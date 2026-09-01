@@ -1,45 +1,20 @@
 /**
  * @file: app/(main)/(tabs)/preliminary.tsx
  * @description:
- *   Экран предварительных заказов — заказы запланированные на определённое время.
+ *   Предзаказы переехали в «Заказы» — вторым режимом того же экрана
+ *   (v1.5.17). Отдельная вкладка занимала одно из четырёх мест главной
+ *   навигации и почти всегда пустовала.
+ *
+ *   Файл оставлен редиректом: маршрут мог сохраниться в истории навигации
+ *   и в уведомлениях, разосланных прежними версиями приложения.
+ *
+ * @dependencies: expo-router
  * @created: 2026-03-18 06:00:00
- * @updated: 2026-03-18 06:00:00
+ * @updated: 2026-09-01 (v1.5.17 — редирект в «Заказы»)
  */
 
-import { View, Text, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Redirect } from 'expo-router';
 
 export default function PreliminaryScreen() {
-  return (
-    <View style={styles.container}>
-      <Ionicons name="time-outline" size={48} color="#d1d5db" />
-      <Text style={styles.title}>Предварительные заказы</Text>
-      <Text style={styles.subtitle}>
-        Здесь будут отображаться заказы,{'\n'}запланированные на определённое время
-      </Text>
-    </View>
-  );
+  return <Redirect href="/(main)/(tabs)/orders" />;
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f3f4f6',
-    padding: 32,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#374151',
-    marginTop: 16,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#9ca3af',
-    marginTop: 8,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-});

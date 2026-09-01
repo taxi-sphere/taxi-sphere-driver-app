@@ -1,24 +1,84 @@
 /**
  * @file: src/components/TopBar.tsx
  * @description:
- *   Верхняя панель приложения — общая для всех вкладок.
- *   Содержит: гамбургер, кнопка Занят/Готов, GPS-статус, индикатор связи,
- *   строка баланса/рейтинга/поездок.
+ *   Верхняя панель — единственный элемент, который водитель видит на любом
+ *   экране, поэтому именно она задаёт тон всему приложению.
+ *
+ *   ЧТО ИЗМЕНИЛОСЬ В v1.5.17.
+ *   • Статус стал «таблеткой» с точкой и подписью, а не прямоугольной
+ *     заливкой во всю ширину: заливка кричала громче кнопки действия на
+ *     самом экране и перетягивала внимание на себя.
+ *   • Панель больше не ПОДПРЫГИВАЕТ при потере связи. Раньше кнопка статуса
+ *     и заглушка «НЕТ СВЯЗИ» были двумя разными ветками разметки, и при
+ *     каждом обрыве шапка перестраивалась. Теперь это одно место с разным
+ *     содержимым.
+ *   • Появился статус `on_order`: он был в типе `DriverStatus`, но шапка
+ *     показывала водителя на заказе как «ЗАНЯТ», и нажатие на кнопку в этот
+ *     момент отправляло его в «Свободен» прямо посреди поездки.
+ *   • Индикатор связи «дышит», пока соединение живо. Статичная точка не
+ *     отличима от замёрзшего экрана — а зависший интерфейс водитель обязан
+ *     замечать сразу.
+ *
+ * @dependencies:
+ *   - @/hooks/useDriverStatus, useDriverProfile, useLocationTracking
+ *   - @/stores/connection.store
+ *   - @/lib/theme, @/components/ui
  * @created: 2026-03-18 07:00:00
- * @updated: 2026-03-18 07:00:00
+ * @updated: 2026-09-01 (v1.5.17 — редизайн, тема, статус on_order)
  */
 
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { useEffect } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
 import { useDriverProfile } from '@/hooks/useDriverProfile';
 import { useLocationTracking } from '@/hooks/useLocationTracking';
 import { useConnectionStore } from '@/stores/connection.store';
+import { formatCurrency } from '@/lib/utils';
+import {
+  icon as iconTokens,
+  radius,
+  spacing,
+  touch,
+  useTheme,
+  useThemedStyles,
+  type Theme,
+  type ThemeColors,
+} from '@/lib/theme';
+import { spring, timing } from '@/lib/design/motion';
+import { AppText, IconButton } from '@/components/ui';
+import type { DriverStatus } from '@/types/driver';
 
 interface TopBarProps {
   onMenuPress: () => void;
 }
+
+/** Как выглядит каждый статус: подпись, цвет и можно ли его переключить. */
+const STATUS_VIEW: Record<
+  DriverStatus,
+  { label: string; color: keyof ThemeColors; background: keyof ThemeColors; togglable: boolean }
+> = {
+  online: { label: 'СВОБОДЕН', color: 'success', background: 'successSoft', togglable: true },
+  busy: { label: 'ЗАНЯТ', color: 'warning', background: 'warningSoft', togglable: true },
+  // Посреди поездки переключать статус нельзя: это сняло бы водителя с
+  // заказа, который он уже везёт.
+  on_order: { label: 'НА ЗАКАЗЕ', color: 'primary', background: 'primarySoft', togglable: false },
+  offline: {
+    label: 'НЕ НА ЛИНИИ',
+    color: 'textMuted',
+    background: 'surfaceSunken',
+    togglable: true,
+  },
+};
 
 export function TopBar({ onMenuPress }: TopBarProps) {
   const router = useRouter();
@@ -31,96 +91,112 @@ export function TopBar({ onMenuPress }: TopBarProps) {
   // водителя при старте — см. useDriverProfile.
   const { data: profile } = useDriverProfile();
 
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+
+  const view = STATUS_VIEW[status] ?? STATUS_VIEW.offline;
+  const canToggle = isConnected && view.togglable && !isUpdating;
+
+  const scale = useSharedValue(1);
+  const pillStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
+  const statusLabel = !isConnected ? 'НЕТ СВЯЗИ' : isUpdating ? 'МЕНЯЮ…' : view.label;
+  const statusColor = isConnected ? colors[view.color] : colors.danger;
+
   return (
     <View style={styles.wrapper}>
-      {/* Строка 1: гамбургер | кнопка | GPS | связь */}
       <View style={styles.topRow}>
-        <TouchableOpacity
+        <IconButton
+          icon="menu"
           onPress={onMenuPress}
-          style={styles.hamburger}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="menu" size={26} color="#374151" />
-        </TouchableOpacity>
+          accessibilityLabel="Открыть меню"
+          size={touch.min}
+          background="transparent"
+          color={colors.textSecondary}
+        />
 
-        {isConnected && (
-          <TouchableOpacity
-            style={[
-              styles.statusBtn,
-              status === 'online' ? styles.statusBtnOnline : styles.statusBtnBusy,
-            ]}
-            onPress={toggleBusy}
-            disabled={isUpdating}
-            activeOpacity={0.7}
+        <Animated.View style={[styles.pillWrap, pillStyle]}>
+          <Pressable
+            onPress={canToggle ? toggleBusy : undefined}
+            disabled={!canToggle}
+            onPressIn={() => {
+              if (canToggle) scale.value = withSpring(0.97, spring.snappy);
+            }}
+            onPressOut={() => {
+              scale.value = withSpring(1, spring.snappy);
+            }}
             accessibilityRole="button"
             accessibilityLabel={
-              status === 'online' ? 'Свободен, принимаю заказы' : 'Занят, не принимаю заказы'
+              isConnected ? `Статус: ${view.label.toLowerCase()}` : 'Нет связи с сервером'
             }
-            accessibilityHint="Нажмите для переключения статуса"
+            accessibilityHint={canToggle ? 'Нажмите, чтобы переключить статус' : undefined}
+            accessibilityState={{ disabled: !canToggle, busy: isUpdating }}
+            style={[
+              styles.pill,
+              { backgroundColor: isConnected ? colors[view.background] : colors.dangerSoft },
+            ]}
           >
-            <Text style={styles.statusBtnLabel}>
-              {isUpdating ? '...' : status === 'online' ? 'СВОБОДЕН' : 'ЗАНЯТ'}
-            </Text>
-          </TouchableOpacity>
-        )}
-
-        {!isConnected && (
-          <View style={[styles.statusBtn, styles.statusBtnOffline]}>
-            <Text style={styles.statusBtnLabel}>НЕТ СВЯЗИ</Text>
-          </View>
-        )}
+            <View style={[styles.pillDot, { backgroundColor: statusColor }]} />
+            <AppText
+              variant="labelStrong"
+              style={{ color: statusColor, letterSpacing: 0.4 }}
+              numberOfLines={1}
+            >
+              {statusLabel}
+            </AppText>
+          </Pressable>
+        </Animated.View>
 
         <View style={styles.indicators}>
-          <View style={styles.indicatorItem}>
+          <View style={styles.indicator}>
             <Ionicons
               name={isTracking ? 'navigate' : 'navigate-outline'}
-              size={16}
-              color={isTracking ? '#22c55e' : '#ef4444'}
+              size={iconTokens.sm}
+              color={isTracking ? colors.success : colors.danger}
             />
-            <Text
-              style={[
-                styles.indicatorText,
-                isTracking ? styles.indicatorOk : styles.indicatorBad,
-              ]}
+            <AppText
+              variant="caption"
+              style={{ color: isTracking ? colors.success : colors.danger, fontWeight: '700' }}
             >
               GPS
-            </Text>
+            </AppText>
           </View>
-          <View
-            style={[
-              styles.connDot,
-              isConnected ? styles.connDotOk : styles.connDotBad,
-            ]}
-          />
+          <LiveDot connected={isConnected} />
         </View>
       </View>
 
-      {/* Строка 2: баланс | рейтинг | поездки */}
       {profile && (
-        <View style={styles.infoRow}>
-          <TouchableOpacity
-            style={styles.infoItem}
+        <View style={styles.statRow}>
+          <Pressable
+            style={styles.stat}
             onPress={() => router.push('/(main)/balance' as never)}
-            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+            accessibilityRole="button"
+            accessibilityLabel="Баланс, открыть"
+            hitSlop={spacing.sm}
           >
-            <Ionicons name="wallet-outline" size={14} color="#6b7280" />
-            <Text style={styles.infoText}>
-              {Math.round(profile.balance ?? 0)} ₽
-            </Text>
-          </TouchableOpacity>
-          <View style={styles.infoDivider} />
-          <View style={styles.infoItem}>
-            <Ionicons name="star" size={14} color="#f59e0b" />
-            <Text style={styles.infoText}>
+            <Ionicons name="wallet-outline" size={iconTokens.xs} color={colors.textMuted} />
+            <AppText variant="label" weight="700">
+              {formatCurrency(profile.balance ?? 0)}
+            </AppText>
+            <Ionicons name="chevron-forward" size={12} color={colors.textMuted} />
+          </Pressable>
+
+          <View style={styles.statDivider} />
+
+          <View style={styles.stat}>
+            <Ionicons name="star" size={iconTokens.xs} color={colors.warning} />
+            <AppText variant="label" weight="700">
               {(profile.rating ?? 0).toFixed(1)}
-            </Text>
+            </AppText>
           </View>
-          <View style={styles.infoDivider} />
-          <View style={styles.infoItem}>
-            <Ionicons name="car-outline" size={14} color="#6b7280" />
-            <Text style={styles.infoText}>
-              {profile.totalTrips ?? 0} поездок
-            </Text>
+
+          <View style={styles.statDivider} />
+
+          <View style={styles.stat}>
+            <Ionicons name="car-outline" size={iconTokens.xs} color={colors.textMuted} />
+            <AppText variant="label" tone="secondary">
+              {profile.totalTrips ?? 0}
+            </AppText>
           </View>
         </View>
       )}
@@ -128,99 +204,107 @@ export function TopBar({ onMenuPress }: TopBarProps) {
   );
 }
 
-const styles = StyleSheet.create({
-  wrapper: {
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 10,
-  },
-  hamburger: {
-    padding: 4,
-  },
-  statusBtn: {
-    flex: 1,
-    paddingVertical: 9,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  statusBtnBusy: {
-    backgroundColor: '#f59e0b',
-  },
-  statusBtnOnline: {
-    backgroundColor: '#22c55e',
-  },
-  statusBtnOffline: {
-    backgroundColor: '#6b7280',
-  },
-  statusBtnOnOrder: {
-    backgroundColor: '#4f46e5',
-  },
-  statusBtnLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#ffffff',
-    letterSpacing: 0.5,
-  },
-  indicators: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  indicatorItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  indicatorText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  indicatorOk: {
-    color: '#22c55e',
-  },
-  indicatorBad: {
-    color: '#ef4444',
-  },
-  connDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  connDotOk: {
-    backgroundColor: '#22c55e',
-  },
-  connDotBad: {
-    backgroundColor: '#ef4444',
-  },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f9fafb',
-    paddingVertical: 5,
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  infoItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  infoText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  infoDivider: {
-    width: 1,
-    height: 14,
-    backgroundColor: '#d1d5db',
-  },
-});
+/** Длительность одной волны ореола. Медленнее пульса покоя — не суетится. */
+const HALO_MS = 1400;
+
+/**
+ * Индикатор связи: точка с расходящимся ореолом, пока соединение живо.
+ *
+ * Движение здесь несёт смысл, а не украшает. Замерший интерфейс внешне
+ * неотличим от работающего, и водитель узнавал об обрыве, только когда
+ * переставали приходить заказы. Пульс прекращается вместе со связью.
+ */
+function LiveDot({ connected }: { connected: boolean }) {
+  const { colors } = useTheme();
+  const halo = useSharedValue(0);
+
+  useEffect(() => {
+    if (!connected) {
+      halo.value = withTiming(0, timing.fast);
+      return;
+    }
+    halo.value = withRepeat(
+      withSequence(withTiming(1, { duration: HALO_MS }), withTiming(0, { duration: 0 })),
+      -1,
+      false,
+    );
+  }, [connected, halo]);
+
+  const haloStyle = useAnimatedStyle(() => ({
+    opacity: 0.35 * (1 - halo.value),
+    transform: [{ scale: 1 + halo.value * 1.8 }],
+  }));
+
+  return (
+    <View style={{ width: 16, height: 16, alignItems: 'center', justifyContent: 'center' }}>
+      {connected && (
+        <Animated.View
+          style={[
+            {
+              position: 'absolute',
+              width: 10,
+              height: 10,
+              borderRadius: 5,
+              backgroundColor: colors.success,
+            },
+            haloStyle,
+          ]}
+        />
+      )}
+      <View
+        style={{
+          width: 10,
+          height: 10,
+          borderRadius: 5,
+          backgroundColor: connected ? colors.success : colors.danger,
+        }}
+      />
+    </View>
+  );
+}
+
+const createStyles = (t: Theme) =>
+  StyleSheet.create({
+    wrapper: {
+      backgroundColor: t.colors.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.border,
+    },
+    topRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+      gap: spacing.sm,
+    },
+    pillWrap: { flex: 1 },
+    pill: {
+      height: 40,
+      borderRadius: radius.pill,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.lg,
+    },
+    pillDot: { width: 8, height: 8, borderRadius: 4 },
+    indicators: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingRight: spacing.xs,
+    },
+    indicator: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+
+    statRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: t.colors.surfaceSunken,
+      paddingVertical: spacing.xs + 2,
+      paddingHorizontal: spacing.lg,
+      gap: spacing.md,
+    },
+    stat: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+    statDivider: { width: 1, height: 14, backgroundColor: t.colors.border },
+  });

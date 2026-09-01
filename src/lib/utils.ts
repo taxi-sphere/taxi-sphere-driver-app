@@ -65,6 +65,34 @@ export function formatDate(isoDate: string | null | undefined): string {
 }
 
 /**
+ * Время подачи предзаказа: «Сегодня 18:30», «Завтра 09:00», «12 мар, 09:00».
+ *
+ * Водителю важно не столько число, сколько «сегодня это или нет» — от
+ * этого зависит, планировать ли смену вокруг заказа. Голая дата такого
+ * ответа не даёт, поэтому ближайшие двое суток называются словами.
+ *
+ * @param now подставляется в тестах; по умолчанию — текущий момент
+ */
+export function formatScheduledAt(
+  isoDate: string | null | undefined,
+  now: Date = new Date(),
+): string {
+  if (!isoDate) return '—';
+  const d = new Date(isoDate);
+  if (Number.isNaN(d.getTime())) return '—';
+
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  // Сравниваем календарные дни, а не разницу в часах: заказ в 00:30 —
+  // это «завтра», даже если до него сорок минут.
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOfDay(d) - startOfDay(now)) / 86_400_000);
+
+  if (days === 0) return `Сегодня ${time}`;
+  if (days === 1) return `Завтра ${time}`;
+  return `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}, ${time}`;
+}
+
+/**
  * Маскировать телефон: «+7 900 *** ** 44»
  */
 export function maskPhone(phone: string): string {

@@ -1,49 +1,61 @@
-import React, { useEffect } from 'react';
-import { View, type ViewStyle } from 'react-native';
+/**
+ * @file: src/components/ui/Skeleton.tsx
+ * @description:
+ *   Заглушки на время загрузки: мерцающий прямоугольник и готовые наборы
+ *   под карточку заказа и экран заработка.
+ *
+ *   Цвет берётся из темы: прежняя заливка `#e5e7eb` в тёмной теме
+ *   светилась ярче самого контента, который она изображала.
+ *
+ * @dependencies: react-native-reanimated, @/lib/theme
+ * @created: 2026-01-24 12:00:00
+ * @updated: 2026-09-01 (v1.5.17 — тема, токены)
+ */
+
+import { useEffect } from 'react';
+import { View, type DimensionValue, type ViewStyle, type StyleProp } from 'react-native';
 import Animated, {
-  useSharedValue,
   useAnimatedStyle,
+  useSharedValue,
   withRepeat,
   withTiming,
-  Easing,
 } from 'react-native-reanimated';
+import { radius, spacing, useTheme } from '@/lib/theme';
+import { easing } from '@/lib/design/motion';
 
 interface SkeletonProps {
-  width?: number | string;
+  width?: DimensionValue;
   height?: number;
   borderRadius?: number;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }
+
+/** Период полного цикла мерцания. Медленнее вдоха — быстрее раздражает. */
+const PULSE_MS = 900;
 
 export function Skeleton({
   width = '100%',
   height = 16,
-  borderRadius = 8,
+  borderRadius: r = radius.sm,
   style,
 }: SkeletonProps) {
-  const opacity = useSharedValue(0.3);
+  const { colors } = useTheme();
+  const opacity = useSharedValue(0.35);
 
   useEffect(() => {
     opacity.value = withRepeat(
-      withTiming(0.7, { duration: 800, easing: Easing.inOut(Easing.ease) }),
+      withTiming(0.75, { duration: PULSE_MS, easing: easing.standard }),
       -1,
       true,
     );
   }, [opacity]);
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-  }));
+  const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
   return (
     <Animated.View
       style={[
-        {
-          width: width as number,
-          height,
-          borderRadius,
-          backgroundColor: '#e5e7eb',
-        },
+        { width, height, borderRadius: r, backgroundColor: colors.skeleton },
         animatedStyle,
         style,
       ]}
@@ -51,34 +63,40 @@ export function Skeleton({
   );
 }
 
-/** Скелетон карточки заказа */
+/** Заглушка карточки заказа — повторяет её реальную раскладку. */
 export function OrderCardSkeleton() {
+  const theme = useTheme();
+
   return (
-    <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 16, gap: 10, borderWidth: 1, borderColor: '#f0f0f0' }}>
+    <View
+      style={[
+        theme.elevation[1],
+        { borderRadius: radius.md, padding: spacing.lg, gap: spacing.md },
+      ]}
+    >
       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-        <Skeleton width={100} height={12} />
-        <Skeleton width={60} height={20} borderRadius={10} />
+        <Skeleton width={110} height={14} />
+        <Skeleton width={70} height={22} borderRadius={radius.sm} />
       </View>
-      <Skeleton width="80%" height={14} />
-      <Skeleton width="60%" height={14} />
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Skeleton width={70} height={12} />
-        <Skeleton width={50} height={12} />
-        <Skeleton width={80} height={12} />
+      <Skeleton width="82%" height={16} />
+      <Skeleton width="62%" height={16} />
+      <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+        <Skeleton width={80} height={14} />
+        <Skeleton width={60} height={14} />
       </View>
     </View>
   );
 }
 
-/** Скелетон экрана заработка */
+/** Заглушка экрана заработка. */
 export function EarningsSkeleton() {
   return (
-    <View style={{ gap: 12 }}>
-      <Skeleton height={100} borderRadius={12} />
-      <Skeleton height={60} borderRadius={12} />
-      <Skeleton height={40} borderRadius={8} />
-      <Skeleton height={40} borderRadius={8} />
-      <Skeleton height={40} borderRadius={8} />
+    <View style={{ gap: spacing.md }}>
+      <Skeleton height={110} borderRadius={radius.lg} />
+      <Skeleton height={64} borderRadius={radius.md} />
+      <Skeleton height={44} borderRadius={radius.sm} />
+      <Skeleton height={44} borderRadius={radius.sm} />
+      <Skeleton height={44} borderRadius={radius.sm} />
     </View>
   );
 }

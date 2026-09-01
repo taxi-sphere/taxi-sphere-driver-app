@@ -1,0 +1,119 @@
+/**
+ * @file: src/components/ui/RoutePoints.tsx
+ * @description:
+ *   Маршрут заказа: откуда, промежуточные остановки, куда — точками на
+ *   вертикальной линии.
+ *
+ *   ЗАЧЕМ. Эта раскладка существовала в трёх копиях (карточка в списке
+ *   заказов, экран текущего заказа, модалка входящего), и во всех трёх
+ *   точки висели в воздухе без соединяющей линии, отчего порядок адресов
+ *   читался не сразу. Здесь точки соединены — взгляд идёт сверху вниз, как
+ *   и поездка.
+ *
+ *   Цвета точек — из палитры (`pointPickup` / `pointStop` / `pointDropoff`),
+ *   а не зелёный-жёлтый-красный по месту.
+ *
+ * @dependencies: react-native, @/lib/theme
+ * @created: 2026-09-01 (v1.5.17)
+ */
+
+import type { ReactNode } from 'react';
+import { View, type ViewStyle, type StyleProp } from 'react-native';
+import { spacing, useTheme } from '@/lib/theme';
+import { AppText } from './Text';
+
+export interface RoutePoint {
+  address: string;
+  /** Подъезд, комментарий к адресу — второй строкой помельче. */
+  note?: string | null;
+  kind: 'pickup' | 'stop' | 'dropoff';
+  /** Кнопка «Ехать» или что-то ещё, прижатое к правому краю строки. */
+  action?: ReactNode;
+}
+
+interface RoutePointsProps {
+  points: RoutePoint[];
+  /** Крупные адреса — для экрана активного заказа, где важна читаемость на ходу. */
+  emphasized?: boolean;
+  /** Обрезать адрес одной строкой — для плотного списка. */
+  compact?: boolean;
+  style?: StyleProp<ViewStyle>;
+}
+
+const DOT = 12;
+
+export function RoutePoints({
+  points,
+  emphasized = false,
+  compact = false,
+  style,
+}: RoutePointsProps) {
+  const { colors } = useTheme();
+
+  const dotColor: Record<RoutePoint['kind'], string> = {
+    pickup: colors.pointPickup,
+    stop: colors.pointStop,
+    dropoff: colors.pointDropoff,
+  };
+
+  return (
+    <View style={style}>
+      {points.map((point, index) => {
+        const isLast = index === points.length - 1;
+
+        return (
+          <View key={`${point.kind}-${index}`} style={{ flexDirection: 'row', gap: spacing.md }}>
+            {/* Колонка с точкой и линией до следующей точки */}
+            <View style={{ alignItems: 'center', width: DOT }}>
+              <View
+                style={{
+                  width: DOT,
+                  height: DOT,
+                  borderRadius: DOT / 2,
+                  backgroundColor: dotColor[point.kind],
+                  marginTop: emphasized ? 6 : 4,
+                }}
+              />
+              {!isLast && (
+                <View
+                  style={{
+                    flex: 1,
+                    width: 2,
+                    minHeight: spacing.md,
+                    backgroundColor: colors.border,
+                    marginVertical: spacing.xs,
+                  }}
+                />
+              )}
+            </View>
+
+            <View
+              style={{
+                flex: 1,
+                flexDirection: 'row',
+                alignItems: 'flex-start',
+                gap: spacing.sm,
+                paddingBottom: isLast ? 0 : spacing.md,
+              }}
+            >
+              <View style={{ flex: 1 }}>
+                <AppText
+                  variant={emphasized ? 'subheading' : 'body'}
+                  numberOfLines={compact ? 1 : undefined}
+                >
+                  {point.address}
+                </AppText>
+                {point.note ? (
+                  <AppText variant="label" tone="muted" style={{ marginTop: 2 }}>
+                    {point.note}
+                  </AppText>
+                ) : null}
+              </View>
+              {point.action}
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}

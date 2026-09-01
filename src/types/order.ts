@@ -85,9 +85,18 @@ export interface CurrentOrder {
 
 /** Мета-информация из API доступных заказов */
 export interface AvailableOrdersMeta {
-  effectiveRadius: number;
-  showOrdersWithoutGps: boolean;
-  hasGps: boolean;
+  effectiveRadius?: number;
+  showOrdersWithoutGps?: boolean;
+  hasGps?: boolean;
+  /**
+   * Появилось на сервере в v1.99.58 вместе с правилом «один активный заказ
+   * на водителя». Пустой список — это два разных случая: «заказов нет» и
+   * «вам сейчас нельзя». Без этих полей приложение показывало обоим одно
+   * и то же «Нет доступных заказов», и водитель на подаче считал, что
+   * заказов в городе нет.
+   */
+  blockedReason?: string | null;
+  blockedMessage?: string | null;
 }
 
 /** Ответ принятия заказа (POST /driver/orders/{id}/accept) */

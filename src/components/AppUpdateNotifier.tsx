@@ -40,6 +40,16 @@ import { useAppUpdate } from '@/hooks/useAppUpdate';
 import { useUpdateRequestStore } from '@/stores/update-request.store';
 import type { DriverAppLatestPublicDTO } from '@/api/app.api';
 import { downloadAndInstallApk, type DownloadProgress } from '@/services/apk-installer';
+import {
+  icon as iconTokens,
+  radius,
+  spacing,
+  text,
+  touch,
+  useTheme,
+  useThemedStyles,
+  type Theme,
+} from '@/lib/theme';
 
 // ─── Хелперы ─────────────────────────────────────────────────────────────────
 
@@ -51,6 +61,8 @@ function formatMb(bytes: number): string {
 // ─── Компонент ──────────────────────────────────────────────────────────────
 
 export function AppUpdateNotifier() {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const insets = useSafeAreaInsets();
   const { currentVersion, latest, hasUpdate, isForced, dismissed, dismiss } = useAppUpdate();
   const [downloading, setDownloading] = useState(false);
@@ -118,7 +130,7 @@ export function AppUpdateNotifier() {
             <Ionicons
               name={error ? 'alert-circle' : 'cloud-download-outline'}
               size={48}
-              color={error ? '#dc2626' : '#4f46e5'}
+              color={error ? colors.danger : colors.primary}
               style={{ alignSelf: 'center', marginBottom: 12 }}
             />
             {error ? (
@@ -159,7 +171,7 @@ export function AppUpdateNotifier() {
                 </Text>
                 <ActivityIndicator
                   size="small"
-                  color="#4f46e5"
+                  color={colors.primary}
                   style={{ marginTop: 12 }}
                 />
               </>
@@ -182,7 +194,7 @@ export function AppUpdateNotifier() {
             <Ionicons
               name="warning"
               size={48}
-              color="#dc2626"
+              color={colors.danger}
               style={{ alignSelf: 'center', marginBottom: 12 }}
             />
             <Text style={styles.modalTitle}>Требуется обновление</Text>
@@ -224,7 +236,7 @@ export function AppUpdateNotifier() {
     // поверх всего экрана, и без отступа он налезал на часы, значки сети и
     // батареи — текст «Обновление доступно» читался поверх статус-бара.
     <View style={[styles.banner, { paddingTop: insets.top + 8 }]}>
-      <Ionicons name="cloud-download-outline" size={18} color="#4f46e5" />
+      <Ionicons name="cloud-download-outline" size={iconTokens.md} color={colors.primary} />
       <View style={{ flex: 1 }}>
         <Text style={styles.bannerTitle}>
           Обновление {latest.latestVersion} доступно
@@ -243,7 +255,7 @@ export function AppUpdateNotifier() {
         onPress={dismiss}
         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
-        <Ionicons name="close" size={20} color="#6b7280" />
+        <Ionicons name="close" size={iconTokens.md} color={colors.textMuted} />
       </TouchableOpacity>
     </View>
   );
@@ -251,109 +263,87 @@ export function AppUpdateNotifier() {
 
 // ─── Стили ──────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  banner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#eef2ff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#c7d2fe',
-  },
-  bannerTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#1e1b4b',
-  },
-  bannerSubtitle: {
-    fontSize: 11,
-    color: '#4338ca',
-    marginTop: 1,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 340,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-  },
-  modalTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#0f172a',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  modalText: {
-    fontSize: 13,
-    color: '#334155',
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  changelog: {
-    marginTop: 12,
-    padding: 8,
-    borderRadius: 6,
-    backgroundColor: '#f1f5f9',
-    fontSize: 12,
-    color: '#475569',
-    lineHeight: 16,
-  },
-  progressBar: {
-    marginTop: 12,
-    height: 8,
-    backgroundColor: '#e2e8f0',
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#4f46e5',
-  },
-  progressText: {
-    marginTop: 6,
-    fontSize: 11,
-    color: '#64748b',
-    textAlign: 'center',
-  },
-  btn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  btnCompact: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  btnPrimary: {
-    backgroundColor: '#4f46e5',
-  },
-  btnPrimaryText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  btnGhost: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-  },
-  btnGhostText: {
-    color: '#334155',
-    fontSize: 13,
-    fontWeight: '500',
-  },
-});
+/**
+ * Стили баннера и модалки обновления.
+ *
+ * v1.5.17: были жёстко светлыми. Баннер обновления показывается поверх
+ * ЛЮБОГО экрана, в том числе поверх карты в тёмной теме, — и светлая
+ * полоса сверху выглядела чужой наклейкой.
+ */
+const createStyles = (t: Theme) =>
+  StyleSheet.create({
+    banner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      backgroundColor: t.colors.primarySoft,
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.border,
+    },
+    bannerTitle: { ...text.label, fontWeight: '700', color: t.colors.textPrimary },
+    bannerSubtitle: { ...text.caption, color: t.colors.primary, marginTop: 1 },
+
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: t.colors.scrim,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: spacing.xxl,
+    },
+    modalCard: {
+      width: '100%',
+      maxWidth: 360,
+      backgroundColor: t.colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.xl,
+      borderWidth: t.isDark ? 1 : 0,
+      borderColor: t.colors.border,
+    },
+    modalTitle: {
+      ...text.heading,
+      color: t.colors.textPrimary,
+      textAlign: 'center',
+      marginBottom: spacing.sm,
+    },
+    modalText: { ...text.body, color: t.colors.textSecondary, textAlign: 'center' },
+    changelog: {
+      marginTop: spacing.md,
+      padding: spacing.md,
+      borderRadius: radius.sm,
+      backgroundColor: t.colors.surfaceSunken,
+      ...text.label,
+      color: t.colors.textSecondary,
+    },
+    progressBar: {
+      marginTop: spacing.md,
+      height: 8,
+      backgroundColor: t.colors.surfaceSunken,
+      borderRadius: 4,
+      overflow: 'hidden',
+    },
+    progressFill: { height: '100%', backgroundColor: t.colors.primary },
+    progressText: {
+      marginTop: spacing.xs,
+      ...text.caption,
+      color: t.colors.textMuted,
+      textAlign: 'center',
+    },
+
+    btn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.xs,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+      borderRadius: radius.md,
+      minHeight: touch.min,
+    },
+    btnCompact: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, minHeight: 0 },
+    btnPrimary: { backgroundColor: t.colors.primary },
+    btnPrimaryText: { ...text.label, fontWeight: '700', color: t.colors.textInverse },
+    btnGhost: { backgroundColor: 'transparent', borderWidth: 1, borderColor: t.colors.border },
+    btnGhostText: { ...text.label, color: t.colors.textSecondary },
+  });

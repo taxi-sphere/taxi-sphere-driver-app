@@ -1,38 +1,70 @@
 /**
  * @file: app/(main)/(tabs)/current.tsx
  * @description:
- *   Экран текущего заказа — state machine:
- *   Нет заказа → assigned → driver_arrived → in_progress → completed.
- *   Каждое состояние имеет свои действия и UI.
+ *   Экран активного заказа — главный экран водителя.
+ *   State machine: нет заказа → assigned → driver_arrived → in_progress →
+ *   completed. Каждому состоянию отвечает своя цель на карте и своя главная
+ *   кнопка.
  *
- *   v1.5.5: (1) guard `pickupLat/Lng` перед `<OrderMap>` — react-native-maps
- *   падал на невалидных координатах (undefined/NaN), краш убивал весь экран
- *   при ручном открытии вкладки. (2) все ошибки логируются через
- *   driverLogger.error — админ может отсмотреть в карточке водителя
- *   (/admin/drivers/[id] → Логи).
- * @dependencies: useCurrentOrder, useOrderActions, useDriverStatus
+ *   ПЕРЕСОБРАН В v1.5.17. Было: вертикальная простыня из восьми карточек и
+ *   карта высотой 180px где-то в середине. Чтобы прочитать адрес подачи,
+ *   водитель скроллил; чтобы понять, куда ехать, — скроллил ещё раз.
+ *   Стало:
+ *     • карта во весь экран — по ней и работают;
+ *     • шторка снизу с тем, что нужно прямо сейчас: текущая цель, клиент,
+ *       цена. Подробности — потянуть вверх, и только если понадобились;
+ *     • главная кнопка на неподвижном месте внизу. Её жмут не глядя, и она
+ *       не должна уезжать вместе с содержимым;
+ *     • полоса этапов вместо бейджа: видно и пройденное, и следующий шаг;
+ *     • встречный заказ. Правило «второй заказ можно, когда клиент уже в
+ *       машине» появилось на сервере ещё в v1.99.58, но показать второй
+ *       заказ было негде: `/orders/current` отдаёт ровно один. Теперь
+ *       экран берёт `/orders/active` (список) и, если заказов два,
+ *       показывает переключатель между ними.
+ *
+ *   ЧТО СОХРАНЕНО БЕЗ ИЗМЕНЕНИЙ (проверено при переносе):
+ *     • v1.5.5 guard `pickupLat/Lng` перед картой — react-native-maps падал
+ *       на невалидных координатах и уносил весь экран;
+ *     • v1.5.5 логирование всех ошибок действий в админку через
+ *       driverLogger — иначе водитель видел silent-fail, а админ не мог
+ *       понять, почему заказ «завис»;
+ *     • v1.5.12 однократный вывод подъезда (`splitAddressEntrance`) и снятие общего
+ *       города у всех точек (`stripSharedCityPrefix`);
+ *     • подтверждение каждого действия через Alert;
+ *     • таймер ожидания клиента и авто-возврат к списку после завершения.
+ *
+ * @dependencies: useActiveOrders, useOrderActions, @/components/ui,
+ *                @/components/order/*, @/components/map/OrderMap
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-08-26 (v1.5.5 — guard OrderMap + логирование)
+ * @updated: 2026-09-01 (v1.5.17 — полная пересборка экрана)
  */
 
-import { useState, useEffect, useMemo, useRef, useCallback, Component, type ReactNode, type ErrorInfo } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  Alert,
-  Linking,
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback,
+  Component,
+  type ReactNode,
+  type ErrorInfo,
+} from 'react';
+import {
   ActivityIndicator,
+  Alert,
+  Dimensions,
+  Linking,
+  ScrollView,
+  StyleSheet,
+  View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useCurrentOrder } from '@/hooks/useCurrentOrder';
+import { Ionicons } from '@expo/vector-icons';
+import { useActiveOrders } from '@/hooks/useCurrentOrder';
 import { useOrderActions } from '@/hooks/useOrderActions';
-import { useDriverStatus } from '@/hooks/useDriverStatus';
 import { useSettingsStore } from '@/stores/settings.store';
 import { driverLogger } from '@/services/logger.service';
+import { haptics } from '@/lib/haptics';
 import {
   formatCurrency,
   formatDistance,
@@ -44,12 +76,33 @@ import {
   stripSharedCityPrefix,
 } from '@/lib/utils';
 import { ORDER_COMPLETE_REDIRECT_MS } from '@/lib/constants';
+import { isEmbeddedMapAvailable, EMBEDDED_MAP_UNAVAILABLE_HINT } from '@/lib/map-availability';
 import {
-  isEmbeddedMapAvailable,
-  EMBEDDED_MAP_UNAVAILABLE_HINT,
-} from '@/lib/map-availability';
-import type { OrderStatus } from '@/types/order';
+  icon as iconTokens,
+  radius,
+  spacing,
+  touch,
+  useTheme,
+  useThemedStyles,
+  type Theme,
+} from '@/lib/theme';
+import {
+  AppText,
+  Badge,
+  BottomSheet,
+  Button,
+  Divider,
+  EmptyState,
+  IconButton,
+  RoutePoints,
+  ScalePress,
+  Screen,
+  Surface,
+  type RoutePoint,
+} from '@/components/ui';
+import { OrderProgress } from '@/components/order/OrderProgress';
 import { OrderMap } from '@/components/map/OrderMap';
+import type { CurrentOrder, OrderStatus } from '@/types/order';
 
 /**
  * v1.5.9: считается один раз на модуль — значение зависит только от
@@ -57,59 +110,65 @@ import { OrderMap } from '@/components/map/OrderMap';
  */
 const mapAvailable = isEmbeddedMapAvailable();
 
-/**
- * Точка маршрута: подпись, адрес и подъезд.
- *
- * v1.5.12: подъезд выводится РОВНО ОДИН раз. Диспетчер выбирает подсказку, в
- * которой подъезд уже входит в строку адреса («Бортникова, д. 48 подъезд 1»),
- * и одновременно заполняется отдельное поле `pickupEntrance` — экран честно
- * рисовал оба, и водитель читал подъезд дважды подряд. `splitAddressEntrance`
- * вырезает дубль из адреса, а сам подъезд показывается чипом: подъехав к
- * дому, водитель ищет глазами именно его, и мельче основного текста он быть
- * не должен.
- */
-function AddressLines({
-  label,
-  address,
-  entrance,
-  note,
-}: {
-  label: string;
-  address: string;
-  entrance: string | null;
-  note: string | null;
-}) {
-  const point = splitAddressEntrance(address, entrance);
+const SCREEN_HEIGHT = Dimensions.get('window').height;
+/** Свёрнутая шторка: полоса этапов, текущая цель, клиент и цена. */
+const SHEET_COLLAPSED = 252;
+/** Развёрнутая — но не во весь экран: карта должна оставаться видимой. */
+const SHEET_EXPANDED = Math.min(Math.max(SCREEN_HEIGHT * 0.66, 420), SCREEN_HEIGHT - 160);
+/** Панель главного действия под шторкой. */
+const ACTION_BAR_HEIGHT = touch.primary + spacing.lg * 2;
 
-  return (
-    <View style={styles.addressContent}>
-      <Text style={styles.addressLabel}>{label}</Text>
-      <Text style={styles.addressText}>{point.address}</Text>
-      {point.entrance && (
-        <View style={styles.entranceChip}>
-          <Text style={styles.entranceChipText}>Подъезд {point.entrance}</Text>
-        </View>
-      )}
-      {note && <Text style={styles.addressNote}>{note}</Text>}
-    </View>
-  );
-}
+/** Что водитель делает на каждом этапе. */
+const ACTION_BY_STATUS: Partial<
+  Record<OrderStatus, { label: string; confirmTitle: string; confirmBody: string; confirm: string }>
+> = {
+  assigned: {
+    label: 'Я НА МЕСТЕ',
+    confirmTitle: 'Прибыли?',
+    confirmBody: 'Подтвердите прибытие на точку подачи',
+    confirm: 'Прибыл',
+  },
+  driver_arrived: {
+    label: 'КЛИЕНТ В МАШИНЕ',
+    confirmTitle: 'Начать поездку?',
+    confirmBody: 'Клиент в машине?',
+    confirm: 'Поехали',
+  },
+  in_progress: {
+    label: 'ЗАВЕРШИТЬ ПОЕЗДКУ',
+    confirmTitle: 'Завершить заказ?',
+    confirmBody: 'Поездка завершена?',
+    confirm: 'Завершить',
+  },
+};
 
 export default function CurrentOrderScreen() {
   const router = useRouter();
-  const { data: order, isLoading, error, refetch } = useCurrentOrder();
-  const { status: driverStatus } = useDriverStatus();
+  const { data: orders, isLoading, error, refetch } = useActiveOrders();
+
+  /**
+   * Какой из активных заказов открыт.
+   *
+   * `null` — «первый в списке»: сервер ставит первым тот, что водитель
+   * выполняет сейчас (`in_progress`), а не встречный. Явный выбор
+   * запоминается, пока этот заказ жив.
+   */
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const order = useMemo(() => {
+    if (!orders || orders.length === 0) return null;
+    return orders.find((o) => o.id === selectedId) ?? orders[0];
+  }, [orders, selectedId]);
   const { arrive, start, complete } = useOrderActions();
   const preferredNavigator = useSettingsStore((s) => s.preferredNavigator);
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   // Таймер ожидания клиента (driver_arrived)
   const [waitingSeconds, setWaitingSeconds] = useState(0);
   const waitingTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Авторедирект после завершения
-  const [redirectCountdown, setRedirectCountdown] = useState<number | null>(
-    null,
-  );
+  const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
 
   /**
    * v1.5.12: адреса точек с общим городом, снятым сразу у всех.
@@ -138,11 +197,9 @@ export default function CurrentOrderScreen() {
       waitingTimer.current = setInterval(() => {
         setWaitingSeconds((prev) => prev + 1);
       }, 1000);
-    } else {
-      if (waitingTimer.current) {
-        clearInterval(waitingTimer.current);
-        waitingTimer.current = null;
-      }
+    } else if (waitingTimer.current) {
+      clearInterval(waitingTimer.current);
+      waitingTimer.current = null;
     }
     return () => {
       if (waitingTimer.current) clearInterval(waitingTimer.current);
@@ -171,6 +228,7 @@ export default function CurrentOrderScreen() {
 
   const openNavigator = useCallback(
     (lat: number, lng: number) => {
+      haptics.tap();
       const urls: Record<string, string> = {
         yandex: `yandexnavi://build_route_on_map?lat_to=${lat}&lon_to=${lng}`,
         '2gis': `dgis://2gis.ru/routeSearch/rsType/car/to/${lng},${lat}`,
@@ -179,9 +237,7 @@ export default function CurrentOrderScreen() {
       const url = urls[preferredNavigator] ?? urls.yandex;
       Linking.openURL(url).catch(() => {
         // Фолбэк на Google Maps web
-        Linking.openURL(
-          `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`,
-        );
+        Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
       });
     },
     [preferredNavigator],
@@ -193,394 +249,482 @@ export default function CurrentOrderScreen() {
    * (react-query показывал error state внутренне, но UI не менялся) —
    * админ не мог понять, почему заказ «завис».
    */
-  const runOrderAction = (
-    action: 'arrive' | 'start' | 'complete',
-    orderId: string,
-    fn: () => void,
-  ) => {
-    try {
-      fn();
-    } catch (e) {
-      void driverLogger.error(`Action ${action} threw synchronously`, {
-        screen: 'current',
-        action: `order_${action}_throw`,
-        orderId,
-        message: e instanceof Error ? e.message : String(e),
-        stack: e instanceof Error ? e.stack : null,
-      });
-      Alert.alert('Ошибка', 'Не удалось выполнить действие. Логи отправлены.');
-    }
-  };
+  const runOrderAction = useCallback(
+    (action: 'arrive' | 'start' | 'complete', orderId: string, fn: () => void) => {
+      try {
+        fn();
+      } catch (e) {
+        void driverLogger.error(`Action ${action} threw synchronously`, {
+          screen: 'current',
+          action: `order_${action}_throw`,
+          orderId,
+          message: e instanceof Error ? e.message : String(e),
+          stack: e instanceof Error ? e.stack : null,
+        });
+        haptics.reject();
+        Alert.alert('Ошибка', 'Не удалось выполнить действие. Логи отправлены.');
+      }
+    },
+    [],
+  );
 
-  const handleArrive = (orderId: string) => {
-    Alert.alert('Прибыли?', 'Подтвердите прибытие на точку подачи', [
-      { text: 'Отмена', style: 'cancel' },
-      {
-        text: 'Прибыл',
-        onPress: () =>
-          runOrderAction('arrive', orderId, () =>
-            arrive.mutate(orderId, {
-              onError: (err) =>
-                void driverLogger.error('arrive.mutate failed', {
-                  screen: 'current',
-                  action: 'order_arrive_error',
-                  orderId,
-                  message: err instanceof Error ? err.message : String(err),
-                }),
-            }),
-          ),
-      },
-    ]);
-  };
+  /** Одно подтверждение на все три действия — текст берётся по статусу. */
+  const handlePrimaryAction = useCallback(() => {
+    if (!order) return;
+    const config = ACTION_BY_STATUS[order.status];
+    if (!config) return;
 
-  const handleStart = (orderId: string) => {
-    Alert.alert('Начать поездку?', 'Клиент в машине?', [
-      { text: 'Отмена', style: 'cancel' },
-      {
-        text: 'Поехали',
-        onPress: () =>
-          runOrderAction('start', orderId, () =>
-            start.mutate(orderId, {
-              onError: (err) =>
-                void driverLogger.error('start.mutate failed', {
-                  screen: 'current',
-                  action: 'order_start_error',
-                  orderId,
-                  message: err instanceof Error ? err.message : String(err),
-                }),
-            }),
-          ),
-      },
-    ]);
-  };
+    const run = () => {
+      haptics.confirm();
+      const onError = (err: unknown, name: string) =>
+        void driverLogger.error(`${name}.mutate failed`, {
+          screen: 'current',
+          action: `order_${name}_error`,
+          orderId: order.id,
+          message: err instanceof Error ? err.message : String(err),
+        });
 
-  const handleComplete = (orderId: string) => {
-    Alert.alert('Завершить заказ?', 'Поездка завершена?', [
+      if (order.status === 'assigned') {
+        runOrderAction('arrive', order.id, () =>
+          arrive.mutate(order.id, { onError: (e) => onError(e, 'arrive') }),
+        );
+      } else if (order.status === 'driver_arrived') {
+        runOrderAction('start', order.id, () =>
+          start.mutate(order.id, { onError: (e) => onError(e, 'start') }),
+        );
+      } else if (order.status === 'in_progress') {
+        runOrderAction('complete', order.id, () =>
+          complete.mutate({ orderId: order.id }, { onError: (e) => onError(e, 'complete') }),
+        );
+      }
+    };
+
+    haptics.tap();
+    Alert.alert(config.confirmTitle, config.confirmBody, [
       { text: 'Отмена', style: 'cancel' },
-      {
-        text: 'Завершить',
-        onPress: () =>
-          runOrderAction('complete', orderId, () =>
-            complete.mutate(
-              { orderId },
-              {
-                onError: (err) =>
-                  void driverLogger.error('complete.mutate failed', {
-                    screen: 'current',
-                    action: 'order_complete_error',
-                    orderId,
-                    message: err instanceof Error ? err.message : String(err),
-                  }),
-              },
-            ),
-          ),
-      },
+      { text: config.confirm, onPress: run },
     ]);
-  };
+  }, [order, arrive, start, complete, runOrderAction]);
 
   const callClient = (phone: string) => {
+    haptics.tap();
     Linking.openURL(`tel:${phone}`);
   };
 
-  // ─── Рендер состояний ───────────────────────────────────────────────
+  // ─── Состояния без заказа ────────────────────────────────────────────
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color="#4f46e5" />
-        </View>
-      </SafeAreaView>
+      <Screen style={styles.centered}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </Screen>
     );
   }
 
   if (error && !order) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.centered}>
-          <Text style={styles.emptyTitle}>Ошибка загрузки</Text>
-          <Text style={styles.emptySubtitle}>
-            {error instanceof Error ? error.message : 'Не удалось загрузить заказ'}
-          </Text>
-          <TouchableOpacity
-            style={styles.retryBtn}
-            onPress={() => void refetch()}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.retryBtnText}>Повторить</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
+      <Screen>
+        <EmptyState
+          icon="cloud-offline-outline"
+          tone="danger"
+          title="Не удалось загрузить заказ"
+          description="Проверьте связь и попробуйте ещё раз"
+          action={{ label: 'Повторить', onPress: () => void refetch() }}
+        />
+      </Screen>
     );
   }
 
-  if (!order || driverStatus !== 'on_order') {
+  if (!order) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.centered}>
-          <Text style={styles.emptyTitle}>Нет активного заказа</Text>
-          <Text style={styles.emptySubtitle}>
-            Перейдите на вкладку «Заказы» и примите заказ
-          </Text>
-        </View>
-      </SafeAreaView>
+      <Screen>
+        <EmptyState
+          icon="car-outline"
+          title="Нет активного заказа"
+          description="Возьмите заказ из списка — он появится здесь"
+          action={{
+            label: 'К списку заказов',
+            onPress: () => router.replace('/(main)/(tabs)/orders'),
+          }}
+        />
+      </Screen>
     );
   }
+
+  // ─── Заказ завершён ──────────────────────────────────────────────────
+
+  if (order.status === 'completed') {
+    return (
+      <Screen style={styles.centered}>
+        <CompletedCard order={order} countdown={redirectCountdown} />
+      </Screen>
+    );
+  }
+
+  // ─── Активный заказ ──────────────────────────────────────────────────
+
+  const target = pickTarget(order, shortAddresses);
+  const action = ACTION_BY_STATUS[order.status];
+  const canShowMap = mapAvailable && order.pickupLat != null && order.pickupLng != null;
+
+  const routePoints: RoutePoint[] = buildRoutePoints(order, shortAddresses, openNavigator);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-      >
-        {/* Шапка: номер + статус */}
-        <View style={styles.header}>
-          <Text style={styles.orderNumber}>#{order.orderNumber}</Text>
-          <StatusBadge status={order.status} />
-        </View>
-
-        {/* Карта заказа — два независимых условия, оба обязательны.
-
-            1) v1.5.5: guard от невалидных координат — react-native-maps
-               падает при lat/lng = undefined/NaN.
-            2) v1.5.9: guard от ОТСУТСТВИЯ ключа Google Maps. Без ключа
-               нативный слой карты не инициализируется и роняет ВСЁ
-               приложение: такой краш не ловится ни ErrorBoundary (он
-               перехватывает только JS-исключения), ни try/catch. Поэтому
-               MapView не монтируется вовсе — см. src/lib/map-availability.ts.
-
-            Маршрут при этом строится во внешнем навигаторе (кнопка ниже),
-            он работает без ключей — заказ ведётся полноценно. */}
-        {mapAvailable &&
-        Number.isFinite(order.pickupLat) &&
-        Number.isFinite(order.pickupLng) ? (
-          <MapErrorBoundary orderId={order.id}>
-            <OrderMap order={order} height={180} />
-          </MapErrorBoundary>
-        ) : (
-          <View style={styles.mapPlaceholder}>
-            <Text style={styles.mapPlaceholderText}>
-              {!mapAvailable
-                ? EMBEDDED_MAP_UNAVAILABLE_HINT
-                : 'Координаты подачи не заданы — карта недоступна'}
-            </Text>
-            {Number.isFinite(order.pickupLat) && Number.isFinite(order.pickupLng) && (
-              <TouchableOpacity
-                style={styles.mapPlaceholderButton}
-                onPress={() => openNavigator(order.pickupLat!, order.pickupLng!)}
-              >
-                <Text style={styles.mapPlaceholderButtonText}>
-                  Открыть в навигаторе
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-
-        {/* Информация о клиенте */}
-        <View style={styles.clientCard}>
-          <View style={styles.clientInfo}>
-            <Text style={styles.clientName}>
-              {order.clientName ?? 'Пассажир'}
-            </Text>
-            <Text style={styles.clientPhone}>
-              {maskPhone(order.clientPhone)}
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={styles.callButton}
-            onPress={() => callClient(order.clientPhone)}
-          >
-            <Text style={styles.callButtonText}>Позвонить</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Адреса */}
-        <View style={styles.addressesCard}>
-          <View style={styles.addressRow}>
-            <View style={[styles.dot, styles.dotGreen]} />
-            <AddressLines
-              label="Подача"
-              address={shortAddresses.pickup || order.pickupAddress}
-              entrance={order.pickupEntrance}
-              note={order.pickupNote}
-            />
-            {order.pickupLat != null &&
-              order.pickupLng != null &&
-              order.status === 'assigned' && (
-                <TouchableOpacity
-                  style={styles.navButton}
-                  onPress={() =>
-                    openNavigator(order.pickupLat!, order.pickupLng!)
-                  }
-                >
-                  <Text style={styles.navButtonText}>Ехать</Text>
-                </TouchableOpacity>
-              )}
-          </View>
-
-          {/* Промежуточные остановки */}
-          {(order.stops ?? []).map((stop, idx) => (
-            <View key={idx} style={styles.addressRow}>
-              <View style={[styles.dot, styles.dotYellow]} />
-              <AddressLines
-                label={`Остановка ${idx + 1}`}
-                address={shortAddresses.stops[idx] ?? stop.address}
-                entrance={stop.entrance}
-                note={stop.note}
-              />
-              {stop.lat != null &&
-                stop.lng != null &&
-                order.status === 'in_progress' && (
-                  <TouchableOpacity
-                    style={styles.navButton}
-                    onPress={() => openNavigator(stop.lat!, stop.lng!)}
-                  >
-                    <Text style={styles.navButtonText}>Ехать</Text>
-                  </TouchableOpacity>
-                )}
-            </View>
-          ))}
-
-          {order.dropoffAddress && (
-            <View style={styles.addressRow}>
-              <View style={[styles.dot, styles.dotRed]} />
-              <AddressLines
-                label="Высадка"
-                address={shortAddresses.dropoff || order.dropoffAddress}
-                entrance={order.dropoffEntrance}
-                note={order.dropoffNote}
-              />
-              {order.dropoffLat != null &&
-                order.dropoffLng != null &&
-                order.status === 'in_progress' && (
-                  <TouchableOpacity
-                    style={styles.navButton}
-                    onPress={() =>
-                      openNavigator(order.dropoffLat!, order.dropoffLng!)
-                    }
-                  >
-                    <Text style={styles.navButtonText}>Ехать</Text>
-                  </TouchableOpacity>
-                )}
-            </View>
-          )}
-        </View>
-
-        {/* Детали заказа */}
-        <View style={styles.detailsCard}>
-          <DetailRow label="Стоимость" value={formatCurrency(order.estimatedPrice)} />
-          {order.estimatedKm != null && (
-            <DetailRow label="Расстояние" value={formatDistance(order.estimatedKm)} />
-          )}
-          {order.estimatedMin != null && (
-            <DetailRow label="Время" value={formatDuration(order.estimatedMin)} />
-          )}
-          {order.paymentMethod && (
-            <DetailRow
-              label="Оплата"
-              value={
-                order.paymentMethod === 'cash'
-                  ? 'Наличные'
-                  : order.paymentMethod === 'card'
-                    ? 'Карта'
-                    : 'Бонусы'
-              }
-            />
-          )}
-          {order.tariffName && (
-            <DetailRow label="Тариф" value={order.tariffName} />
-          )}
-          {order.serviceName && (
-            <DetailRow label="Служба" value={order.serviceName} />
-          )}
-          {order.assignedAt && (
-            <DetailRow label="Назначен" value={formatTime(order.assignedAt)} />
-          )}
-          {order.startedAt && (
-            <DetailRow label="Начат" value={formatTime(order.startedAt)} />
-          )}
-        </View>
-
-        {/* Комментарий */}
-        {order.comment && (
-          <View style={styles.commentCard}>
-            <Text style={styles.commentLabel}>Комментарий</Text>
-            <Text style={styles.commentText}>{order.comment}</Text>
-          </View>
-        )}
-
-        {/* Таймер ожидания */}
-        {order.status === 'driver_arrived' && (
-          <View style={styles.waitingCard}>
-            <Text style={styles.waitingLabel}>Ожидание клиента</Text>
-            <Text style={styles.waitingTimer}>
-              {formatTimer(waitingSeconds)}
-            </Text>
-          </View>
-        )}
-
-        {/* Итог завершения */}
-        {order.status === 'completed' && (
-          <View style={styles.completedCard}>
-            <Text style={styles.completedTitle}>Заказ завершён</Text>
-            <Text style={styles.completedPrice}>
-              {formatCurrency(order.estimatedPrice)}
-            </Text>
-            {redirectCountdown != null && (
-              <Text style={styles.redirectText}>
-                Переход к заказам через {redirectCountdown}с
-              </Text>
-            )}
-          </View>
-        )}
-      </ScrollView>
-
-      {/* Кнопки действий */}
-      {order.status !== 'completed' && order.status !== 'canceled' && (
-        <View style={styles.actionsBar}>
-          {order.status === 'assigned' && (
-            <TouchableOpacity
-              style={[styles.actionButton, styles.actionArrive]}
-              onPress={() => handleArrive(order.id)}
-              disabled={arrive.isPending}
-            >
-              <Text style={styles.actionButtonText}>
-                {arrive.isPending ? 'Отправка...' : 'Я НА МЕСТЕ'}
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {order.status === 'driver_arrived' && (
-            <TouchableOpacity
-              style={[styles.actionButton, styles.actionStart]}
-              onPress={() => handleStart(order.id)}
-              disabled={start.isPending}
-            >
-              <Text style={styles.actionButtonText}>
-                {start.isPending ? 'Отправка...' : 'ПОЕХАЛИ'}
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {order.status === 'in_progress' && (
-            <TouchableOpacity
-              style={[styles.actionButton, styles.actionComplete]}
-              onPress={() => handleComplete(order.id)}
-              disabled={complete.isPending}
-            >
-              <Text style={styles.actionButtonText}>
-                {complete.isPending ? 'Отправка...' : 'ЗАВЕРШИТЬ'}
-              </Text>
-            </TouchableOpacity>
-          )}
+    <View style={styles.root}>
+      {canShowMap ? (
+        <MapErrorBoundary orderId={order.id}>
+          <OrderMap order={order} fill bottomInset={SHEET_COLLAPSED + ACTION_BAR_HEIGHT} />
+        </MapErrorBoundary>
+      ) : (
+        <View style={[styles.mapFallback, { backgroundColor: colors.mapPlaceholder }]}>
+          <Ionicons name="map-outline" size={iconTokens.xxl} color={colors.textMuted} />
+          <AppText variant="label" tone="muted" center style={styles.mapFallbackText}>
+            {mapAvailable ? 'Координаты не указаны' : EMBEDDED_MAP_UNAVAILABLE_HINT}
+          </AppText>
         </View>
       )}
-    </SafeAreaView>
+
+      {/* Плавающая строка над картой: номер заказа и таймер ожидания */}
+      <View style={styles.floatingTop} pointerEvents="box-none">
+        <Surface level={2} padded={false} radius={radius.pill} style={styles.floatingChip}>
+          <AppText variant="labelStrong">№ {order.orderNumber}</AppText>
+        </Surface>
+
+        {order.status === 'driver_arrived' && (
+          <Surface level={2} padded={false} radius={radius.pill} style={styles.floatingChip}>
+            <Ionicons name="hourglass-outline" size={iconTokens.xs} color={colors.warning} />
+            <AppText variant="labelStrong" tone="warning">
+              {formatTimer(waitingSeconds)}
+            </AppText>
+          </Surface>
+        )}
+      </View>
+
+      <BottomSheet
+        collapsedHeight={SHEET_COLLAPSED}
+        expandedHeight={SHEET_EXPANDED}
+        bottomOffset={ACTION_BAR_HEIGHT}
+        header={
+          <View style={styles.sheetHeader}>
+            {/* Переключатель появляется только при встречном заказе —
+                в обычной поездке лишний элемент здесь ни к чему. */}
+            {orders && orders.length > 1 && (
+              <View style={styles.orderSwitch}>
+                {orders.map((item, index) => {
+                  const active = item.id === order.id;
+                  return (
+                    <ScalePress
+                      key={item.id}
+                      onPress={() => setSelectedId(item.id)}
+                      accessibilityLabel={`Заказ № ${item.orderNumber}`}
+                      style={styles.orderSwitchItem}
+                    >
+                      <View
+                        style={[
+                          styles.orderTab,
+                          {
+                            backgroundColor: active ? colors.primary : colors.surfaceSunken,
+                          },
+                        ]}
+                      >
+                        <AppText
+                          variant="label"
+                          weight="700"
+                          style={{ color: active ? colors.textInverse : colors.textSecondary }}
+                          numberOfLines={1}
+                        >
+                          {index === 0 ? 'Текущий' : 'Встречный'} · №{item.orderNumber}
+                        </AppText>
+                      </View>
+                    </ScalePress>
+                  );
+                })}
+              </View>
+            )}
+
+            <OrderProgress status={order.status} />
+
+            <View style={styles.targetBlock}>
+              <AppText variant="overline" tone="muted">
+                {target.label}
+              </AppText>
+              <AppText variant="title" numberOfLines={2}>
+                {target.address}
+              </AppText>
+              {target.entrance ? (
+                <Badge tone="brand" size="md" style={styles.entrance}>
+                  Подъезд {target.entrance}
+                </Badge>
+              ) : null}
+            </View>
+
+            <View style={styles.quickRow}>
+              <IconButton
+                icon="call"
+                onPress={() => callClient(order.clientPhone)}
+                accessibilityLabel="Позвонить клиенту"
+                background={colors.successSoft}
+                color={colors.success}
+              />
+              <View style={styles.clientInfo}>
+                <AppText variant="bodyStrong" numberOfLines={1}>
+                  {order.clientName || 'Клиент'}
+                </AppText>
+                <AppText variant="label" tone="muted">
+                  {maskPhone(order.clientPhone)}
+                </AppText>
+              </View>
+              {target.lat != null && target.lng != null && (
+                <Button
+                  onPress={() => openNavigator(target.lat!, target.lng!)}
+                  icon="navigate"
+                  variant="secondary"
+                  size="md"
+                >
+                  Навигатор
+                </Button>
+              )}
+            </View>
+          </View>
+        }
+      >
+        <ScrollView
+          contentContainerStyle={styles.sheetBody}
+          showsVerticalScrollIndicator={false}
+        >
+          <Divider />
+
+          <View style={styles.section}>
+            <AppText variant="overline" tone="muted">
+              Маршрут
+            </AppText>
+            <RoutePoints points={routePoints} style={styles.route} />
+          </View>
+
+          {order.comment ? (
+            <Surface level={0} style={[styles.comment, { backgroundColor: colors.warningSoft }]}>
+              <AppText variant="overline" tone="warning">
+                Комментарий
+              </AppText>
+              <AppText variant="body" style={styles.commentText}>
+                {order.comment}
+              </AppText>
+            </Surface>
+          ) : null}
+
+          <View style={styles.section}>
+            <AppText variant="overline" tone="muted">
+              Детали
+            </AppText>
+            <Surface level={0} padded={false} style={styles.details}>
+              <DetailRow label="Стоимость" value={formatCurrency(order.estimatedPrice)} strong />
+              {order.estimatedKm != null && (
+                <DetailRow label="Расстояние" value={formatDistance(order.estimatedKm)} />
+              )}
+              {order.estimatedMin != null && (
+                <DetailRow label="Время в пути" value={formatDuration(order.estimatedMin)} />
+              )}
+              {order.paymentMethod && (
+                <DetailRow label="Оплата" value={PAYMENT_LABEL[order.paymentMethod]} />
+              )}
+              {order.tariffName && <DetailRow label="Тариф" value={order.tariffName} />}
+              {order.serviceName && <DetailRow label="Служба" value={order.serviceName} />}
+              {order.assignedAt && (
+                <DetailRow label="Назначен" value={formatTime(order.assignedAt)} />
+              )}
+              {order.startedAt && <DetailRow label="Начат" value={formatTime(order.startedAt)} />}
+            </Surface>
+          </View>
+        </ScrollView>
+      </BottomSheet>
+
+      {/* Панель главного действия. Вне шторки — чтобы не двигалась. */}
+      {action && (
+        <View style={[styles.actionBar, { backgroundColor: colors.surface }]}>
+          <Button
+            onPress={handlePrimaryAction}
+            size="lg"
+            fullWidth
+            variant={order.status === 'in_progress' ? 'success' : 'primary'}
+            loading={arrive.isPending || start.isPending || complete.isPending}
+          >
+            {action.label}
+          </Button>
+        </View>
+      )}
+    </View>
   );
 }
 
-/* ─── Вспомогательные компоненты ──────────────────────────────────────── */
+/* ─── Вспомогательные части ───────────────────────────────────────────── */
+
+const PAYMENT_LABEL: Record<string, string> = {
+  cash: 'Наличные',
+  card: 'Карта',
+  bonus: 'Бонусы',
+};
+
+type ShortAddresses = { pickup: string; stops: string[]; dropoff: string };
+
+/**
+ * Куда водитель едет ПРЯМО СЕЙЧАС.
+ *
+ * До подачи цель — клиент; после посадки — первая невыполненная остановка
+ * или конечная точка. Именно этот адрес и стоит в шторке крупным шрифтом:
+ * остальные нужны реже, и им место в развёрнутом маршруте.
+ */
+function pickTarget(
+  order: CurrentOrder,
+  short: ShortAddresses,
+): { label: string; address: string; entrance: string | null; lat: number | null; lng: number | null } {
+  if (order.status === 'assigned' || order.status === 'driver_arrived') {
+    const point = splitAddressEntrance(short.pickup || order.pickupAddress, order.pickupEntrance);
+    return {
+      label: 'Подача',
+      address: point.address,
+      entrance: point.entrance,
+      lat: order.pickupLat,
+      lng: order.pickupLng,
+    };
+  }
+
+  const firstStop = (order.stops ?? [])[0];
+  if (firstStop) {
+    const point = splitAddressEntrance(short.stops[0] ?? firstStop.address, firstStop.entrance);
+    return {
+      label: 'Остановка',
+      address: point.address,
+      entrance: point.entrance,
+      lat: firstStop.lat,
+      lng: firstStop.lng,
+    };
+  }
+
+  const point = splitAddressEntrance(
+    short.dropoff || order.dropoffAddress || '',
+    order.dropoffEntrance,
+  );
+  return {
+    label: 'Куда',
+    address: point.address || 'Адрес не указан',
+    entrance: point.entrance,
+    lat: order.dropoffLat,
+    lng: order.dropoffLng,
+  };
+}
+
+/** Полный маршрут для развёрнутой шторки. */
+function buildRoutePoints(
+  order: CurrentOrder,
+  short: ShortAddresses,
+  openNavigator: (lat: number, lng: number) => void,
+): RoutePoint[] {
+  const navAction = (lat: number | null, lng: number | null) =>
+    lat != null && lng != null ? (
+      <IconButton
+        icon="navigate-outline"
+        onPress={() => openNavigator(lat, lng)}
+        accessibilityLabel="Открыть в навигаторе"
+        size={touch.min - 8}
+      />
+    ) : undefined;
+
+  const pickup = splitAddressEntrance(short.pickup || order.pickupAddress, order.pickupEntrance);
+  const points: RoutePoint[] = [
+    {
+      kind: 'pickup',
+      address: pickup.address,
+      note: joinNotes(pickup.entrance ? `Подъезд ${pickup.entrance}` : null, order.pickupNote),
+      action: navAction(order.pickupLat, order.pickupLng),
+    },
+  ];
+
+  (order.stops ?? []).forEach((stop, index) => {
+    const point = splitAddressEntrance(short.stops[index] ?? stop.address, stop.entrance);
+    points.push({
+      kind: 'stop',
+      address: point.address,
+      note: joinNotes(point.entrance ? `Подъезд ${point.entrance}` : null, stop.note),
+      action: navAction(stop.lat, stop.lng),
+    });
+  });
+
+  if (order.dropoffAddress) {
+    const dropoff = splitAddressEntrance(
+      short.dropoff || order.dropoffAddress,
+      order.dropoffEntrance,
+    );
+    points.push({
+      kind: 'dropoff',
+      address: dropoff.address,
+      note: joinNotes(dropoff.entrance ? `Подъезд ${dropoff.entrance}` : null, order.dropoffNote),
+      action: navAction(order.dropoffLat, order.dropoffLng),
+    });
+  }
+
+  return points;
+}
+
+function joinNotes(...parts: (string | null | undefined)[]): string | null {
+  const kept = parts.filter(Boolean);
+  return kept.length > 0 ? kept.join(' · ') : null;
+}
+
+function DetailRow({
+  label,
+  value,
+  strong = false,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+}) {
+  const styles = useThemedStyles(createStyles);
+
+  return (
+    <View style={styles.detailRow}>
+      <AppText variant="body" tone="muted">
+        {label}
+      </AppText>
+      <AppText variant={strong ? 'subheading' : 'bodyStrong'}>{value}</AppText>
+    </View>
+  );
+}
+
+/** Экран после завершения: сколько заработано и когда вернёмся к списку. */
+function CompletedCard({
+  order,
+  countdown,
+}: {
+  order: CurrentOrder;
+  countdown: number | null;
+}) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+
+  useEffect(() => {
+    haptics.success();
+  }, []);
+
+  return (
+    <Surface level={2} style={styles.completed}>
+      <View style={[styles.completedIcon, { backgroundColor: colors.successSoft }]}>
+        <Ionicons name="checkmark-circle" size={iconTokens.xxl} color={colors.success} />
+      </View>
+      <AppText variant="heading" center>
+        Заказ завершён
+      </AppText>
+      <AppText variant="display" tone="success" center style={styles.completedPrice}>
+        {formatCurrency(order.estimatedPrice)}
+      </AppText>
+      {countdown != null && (
+        <AppText variant="label" tone="muted" center>
+          Переход к заказам через {countdown} с
+        </AppText>
+      )}
+    </Surface>
+  );
+}
 
 /**
  * v1.5.5: локальный ErrorBoundary для карты заказа. react-native-maps может
@@ -601,385 +745,105 @@ class MapErrorBoundary extends Component<
     return { hasError: true };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo): void {
+  componentDidCatch(error: Error, info: ErrorInfo) {
     void driverLogger.error('OrderMap crash caught by boundary', {
       screen: 'current',
-      action: 'order_map_crash',
+      action: 'map_crash',
       orderId: this.props.orderId,
-      stack: error?.stack ?? null,
-      componentStack: info?.componentStack ?? null,
+      message: error.message,
+      stack: error.stack ?? info.componentStack ?? null,
     });
-    void driverLogger.flush();
   }
 
-  render(): ReactNode {
-    if (this.state.hasError) {
-      return (
-        <View style={styles.mapPlaceholder}>
-          <Text style={styles.mapPlaceholderText}>
-            Карту не удалось отобразить. Заказ можно продолжать вести.
-          </Text>
-        </View>
-      );
-    }
+  render() {
+    if (this.state.hasError) return null;
     return this.props.children;
   }
 }
 
-function StatusBadge({ status }: { status: OrderStatus }) {
-  const config: Record<string, { label: string; bg: string; color: string }> = {
-    assigned: { label: 'Назначен', bg: '#dbeafe', color: '#2563eb' },
-    driver_arrived: { label: 'На месте', bg: '#fef3c7', color: '#d97706' },
-    in_progress: { label: 'В пути', bg: '#d1fae5', color: '#059669' },
-    completed: { label: 'Завершён', bg: '#f3f4f6', color: '#6b7280' },
-    canceled: { label: 'Отменён', bg: '#fee2e2', color: '#dc2626' },
-  };
-  const c = config[status] ?? config.assigned;
+const createStyles = (t: Theme) =>
+  StyleSheet.create({
+    root: { flex: 1, backgroundColor: t.colors.background },
+    centered: { alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
 
-  return (
-    <View style={[styles.badge, { backgroundColor: c.bg }]}>
-      <Text style={[styles.badgeText, { color: c.color }]}>{c.label}</Text>
-    </View>
-  );
-}
+    mapFallback: {
+      ...StyleSheet.absoluteFillObject,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.md,
+      padding: spacing.xxxl,
+    },
+    mapFallbackText: { maxWidth: 300 },
 
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.detailRow}>
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value}</Text>
-    </View>
-  );
-}
+    floatingTop: {
+      position: 'absolute',
+      top: spacing.md,
+      left: spacing.lg,
+      right: spacing.lg,
+      flexDirection: 'row',
+      gap: spacing.sm,
+    },
+    floatingChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs + 2,
+    },
 
-/* ─── Стили ─────────────────────────────────────────────────────────── */
+    sheetHeader: {
+      paddingHorizontal: spacing.lg,
+      paddingBottom: spacing.md,
+      gap: spacing.md,
+    },
+    orderSwitch: { flexDirection: 'row', gap: spacing.sm },
+    orderSwitchItem: { flex: 1 },
+    orderTab: {
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.pill,
+      alignItems: 'center',
+    },
+    targetBlock: { gap: spacing.xs },
+    entrance: { marginTop: spacing.xs },
+    quickRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    clientInfo: { flex: 1 },
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f3f4f6',
-  },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 32,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: '#9ca3af',
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  retryBtn: {
-    marginTop: 16,
-    backgroundColor: '#4f46e5',
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  retryBtnText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-    gap: 12,
-    paddingBottom: 100,
-  },
+    sheetBody: { padding: spacing.lg, paddingTop: 0, gap: spacing.lg },
+    section: { gap: spacing.sm },
+    route: { marginTop: spacing.xs },
+    details: { gap: 0 },
+    detailRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.border,
+    },
+    comment: { gap: spacing.xs },
+    commentText: { marginTop: spacing.xs },
 
-  // Header
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  orderNumber: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
+    actionBar: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      height: ACTION_BAR_HEIGHT,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.lg,
+      borderTopWidth: 1,
+      borderTopColor: t.colors.border,
+    },
 
-  // Client
-  clientCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  clientInfo: {
-    flex: 1,
-  },
-  clientName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  clientPhone: {
-    fontSize: 13,
-    color: '#6b7280',
-    marginTop: 2,
-  },
-  callButton: {
-    backgroundColor: '#4f46e5',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginLeft: 12,
-  },
-  callButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-
-  // Addresses
-  addressesCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 12,
-    gap: 8,
-  },
-  addressRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginTop: 4,
-  },
-  dotGreen: {
-    backgroundColor: '#22c55e',
-  },
-  dotYellow: {
-    backgroundColor: '#f59e0b',
-  },
-  dotRed: {
-    backgroundColor: '#ef4444',
-  },
-  addressContent: {
-    flex: 1,
-  },
-  addressLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#9ca3af',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  addressText: {
-    fontSize: 13,
-    color: '#374151',
-  },
-  addressNote: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginTop: 2,
-  },
-  // Подъезд — то, что водитель ищет глазами у подъехавшего дома, поэтому он
-  // выделен чипом, а не набран заметкой мельче основного текста.
-  entranceChip: {
-    alignSelf: 'flex-start',
-    marginTop: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-    backgroundColor: '#eef2ff',
-  },
-  entranceChipText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#4338ca',
-  },
-  navButton: {
-    backgroundColor: '#4f46e5',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-    marginLeft: 8,
-  },
-  navButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-
-  // Details
-  detailsCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 14,
-    gap: 8,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  detailLabel: {
-    fontSize: 13,
-    color: '#6b7280',
-  },
-  detailValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
-  },
-
-  // Comment
-  commentCard: {
-    backgroundColor: '#fffbeb',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#fde68a',
-  },
-  commentLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#92400e',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  commentText: {
-    fontSize: 14,
-    color: '#78350f',
-  },
-
-  // Waiting timer
-  waitingCard: {
-    backgroundColor: '#fff7ed',
-    borderRadius: 12,
-    padding: 20,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#fed7aa',
-  },
-  waitingLabel: {
-    fontSize: 13,
-    color: '#c2410c',
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  waitingTimer: {
-    fontSize: 36,
-    fontWeight: '700',
-    color: '#ea580c',
-    fontVariant: ['tabular-nums'],
-  },
-
-  // Completed
-  completedCard: {
-    backgroundColor: '#f0fdf4',
-    borderRadius: 12,
-    padding: 24,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-  },
-  completedTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#166534',
-    marginBottom: 8,
-  },
-  completedPrice: {
-    fontSize: 32,
-    fontWeight: '700',
-    color: '#15803d',
-  },
-  redirectText: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginTop: 12,
-  },
-
-  // v1.5.5: плейсхолдер карты (когда координаты не заданы или карта упала)
-  mapPlaceholder: {
-    backgroundColor: '#f3f4f6',
-    borderRadius: 12,
-    // v1.5.9: было фиксированное height: 100 — кнопка «Открыть в навигаторе»
-    // в него не помещалась и обрезалась.
-    minHeight: 100,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-  },
-  mapPlaceholderText: {
-    fontSize: 12,
-    color: '#6b7280',
-    textAlign: 'center',
-  },
-  // v1.5.9: кнопка внешнего навигатора прямо в плейсхолдере — когда
-  // встроенной карты нет, маршрут строится здесь.
-  mapPlaceholderButton: {
-    marginTop: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    backgroundColor: '#4f46e5',
-  },
-  mapPlaceholderButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-
-  // Actions bar
-  actionsBar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 16,
-    paddingBottom: 32,
-    backgroundColor: '#ffffff',
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-  },
-  actionButton: {
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  actionArrive: {
-    backgroundColor: '#2563eb',
-  },
-  actionStart: {
-    backgroundColor: '#059669',
-  },
-  actionComplete: {
-    backgroundColor: '#dc2626',
-  },
-  actionButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#ffffff',
-    letterSpacing: 0.5,
-  },
-});
+    completed: { alignItems: 'center', gap: spacing.sm, width: '100%', maxWidth: 380 },
+    completedIcon: {
+      width: 88,
+      height: 88,
+      borderRadius: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: spacing.sm,
+    },
+    completedPrice: { marginVertical: spacing.xs },
+  });

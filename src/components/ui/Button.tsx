@@ -1,60 +1,63 @@
-import React from 'react';
-import {
-  TouchableOpacity,
-  Text,
-  ActivityIndicator,
-  StyleSheet,
-  type ViewStyle,
-  type TextStyle,
-} from 'react-native';
+/**
+ * @file: src/components/ui/Button.tsx
+ * @description:
+ *   Кнопка приложения: тема, размеры под палец, отклик на нажатие.
+ *
+ *   РАЗМЕРЫ ПОДНЯТЫ. Было 32/40/48/56 — нижние два меньше 48dp, которые
+ *   Android считает минимальной зоной для пальца. Стало 40/48/56, и `sm`
+ *   добирает недостающее через `hitSlop`: визуально компактная кнопка
+ *   остаётся нажимаемой на ходу.
+ *
+ *   ОТКЛИК НА НАЖАТИЕ — не украшение. Водитель жмёт «Я на месте», не глядя
+ *   на экран; подтверждение касания должно приходить раньше, чем ответ
+ *   сервера, иначе кнопку жмут второй раз.
+ *
+ * @dependencies: react-native, react-native-reanimated, @expo/vector-icons, @/lib/theme
+ * @created: 2026-01-24 12:00:00
+ * @updated: 2026-09-01 (v1.5.17 — тема, токены, анимация нажатия)
+ */
 
-type ButtonVariant = 'primary' | 'secondary' | 'success' | 'danger' | 'outline' | 'ghost';
-type ButtonSize = 'sm' | 'md' | 'lg' | 'xl';
+import type { ReactNode } from 'react';
+import { ActivityIndicator, Pressable, Text, View, type ViewStyle, type StyleProp } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { Ionicons } from '@expo/vector-icons';
+import { icon as iconTokens, radius, spacing, text, touch, useTheme } from '@/lib/theme';
+import { spring } from '@/lib/design/motion';
+
+export type ButtonVariant =
+  | 'primary'
+  | 'secondary'
+  | 'success'
+  | 'danger'
+  | 'outline'
+  | 'ghost';
+
+export type ButtonSize = 'sm' | 'md' | 'lg';
+
+type IoniconName = keyof typeof Ionicons.glyphMap;
 
 interface ButtonProps {
-  children: React.ReactNode;
+  children: ReactNode;
   onPress: () => void;
   variant?: ButtonVariant;
   size?: ButtonSize;
   disabled?: boolean;
   loading?: boolean;
   fullWidth?: boolean;
-  style?: ViewStyle;
+  icon?: IoniconName;
+  iconPosition?: 'left' | 'right';
+  style?: StyleProp<ViewStyle>;
+  accessibilityLabel?: string;
 }
 
-const bgColors: Record<ButtonVariant, string> = {
-  primary: '#4f46e5',
-  secondary: '#6b7280',
-  success: '#16a34a',
-  danger: '#ef4444',
-  outline: 'transparent',
-  ghost: 'transparent',
+const SIZES: Record<ButtonSize, { height: number; padding: number; variant: 'label' | 'bodyStrong' | 'subheading'; icon: number }> = {
+  sm: { height: 40, padding: spacing.md, variant: 'label', icon: iconTokens.sm },
+  md: { height: touch.min, padding: spacing.lg, variant: 'bodyStrong', icon: iconTokens.md },
+  lg: { height: touch.primary, padding: spacing.xl, variant: 'subheading', icon: iconTokens.lg },
 };
 
-const pressedColors: Record<ButtonVariant, string> = {
-  primary: '#4338ca',
-  secondary: '#4b5563',
-  success: '#15803d',
-  danger: '#dc2626',
-  outline: '#f3f4f6',
-  ghost: '#f3f4f6',
-};
-
-const textColorMap: Record<ButtonVariant, string> = {
-  primary: '#ffffff',
-  secondary: '#ffffff',
-  success: '#ffffff',
-  danger: '#ffffff',
-  outline: '#4f46e5',
-  ghost: '#374151',
-};
-
-const sizes: Record<ButtonSize, { height: number; paddingHorizontal: number; fontSize: number; borderRadius: number }> = {
-  sm: { height: 32, paddingHorizontal: 12, fontSize: 12, borderRadius: 8 },
-  md: { height: 40, paddingHorizontal: 16, fontSize: 14, borderRadius: 10 },
-  lg: { height: 48, paddingHorizontal: 20, fontSize: 16, borderRadius: 12 },
-  xl: { height: 56, paddingHorizontal: 24, fontSize: 18, borderRadius: 14 },
-};
+/** Насколько кнопка «проседает» под пальцем. Едва заметно — это подтверждение, а не эффект. */
+const PRESS_SCALE = 0.97;
 
 export function Button({
   children,
@@ -64,40 +67,147 @@ export function Button({
   disabled = false,
   loading = false,
   fullWidth = false,
+  icon,
+  iconPosition = 'left',
   style,
+  accessibilityLabel,
 }: ButtonProps) {
-  const s = sizes[size];
-  const bg = disabled ? '#d1d5db' : bgColors[variant];
-  const color = disabled ? '#9ca3af' : textColorMap[variant];
-  const borderWidth = variant === 'outline' ? 1.5 : 0;
-  const borderColor = variant === 'outline' ? '#4f46e5' : 'transparent';
+  const { colors } = useTheme();
+  const s = SIZES[size];
+  const scale = useSharedValue(1);
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
+  const fills: Record<ButtonVariant, string> = {
+    primary: colors.primary,
+    secondary: colors.surfaceSunken,
+    success: colors.success,
+    danger: colors.danger,
+    outline: 'transparent',
+    ghost: 'transparent',
+  };
+  const labels: Record<ButtonVariant, string> = {
+    primary: colors.textInverse,
+    secondary: colors.textPrimary,
+    success: colors.textInverse,
+    danger: colors.textInverse,
+    outline: colors.primary,
+    ghost: colors.textSecondary,
+  };
+
+  const isBlocked = disabled || loading;
+  const background = disabled ? colors.surfaceSunken : fills[variant];
+  const foreground = disabled ? colors.textMuted : labels[variant];
 
   return (
-    <TouchableOpacity
-      onPress={onPress}
-      disabled={disabled || loading}
-      activeOpacity={0.7}
-      style={[
-        {
-          height: s.height,
-          paddingHorizontal: s.paddingHorizontal,
-          borderRadius: s.borderRadius,
-          backgroundColor: bg,
-          borderWidth,
-          borderColor,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 6,
-        },
-        fullWidth && { width: '100%' },
-        style,
-      ]}
-    >
-      {loading && <ActivityIndicator size="small" color={color} />}
-      <Text style={{ fontSize: s.fontSize, fontWeight: '600', color }}>
-        {children}
-      </Text>
-    </TouchableOpacity>
+    <Animated.View style={[animStyle, fullWidth ? { width: '100%' } : null]}>
+      <Pressable
+        onPress={onPress}
+        disabled={isBlocked}
+        onPressIn={() => {
+          scale.value = withSpring(PRESS_SCALE, spring.snappy);
+        }}
+        onPressOut={() => {
+          scale.value = withSpring(1, spring.snappy);
+        }}
+        // Компактная кнопка визуально мельче зоны нажатия — разницу добираем сюда.
+        hitSlop={size === 'sm' ? spacing.xs : undefined}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityState={{ disabled: isBlocked, busy: loading }}
+        style={[
+          {
+            height: s.height,
+            paddingHorizontal: s.padding,
+            borderRadius: radius.md,
+            backgroundColor: background,
+            borderWidth: variant === 'outline' ? 1.5 : 0,
+            borderColor: variant === 'outline' ? (disabled ? colors.border : colors.primary) : 'transparent',
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: spacing.sm,
+          },
+          fullWidth ? { width: '100%' } : null,
+          style,
+        ]}
+      >
+        {loading ? (
+          <ActivityIndicator size="small" color={foreground} />
+        ) : (
+          icon &&
+          iconPosition === 'left' && <Ionicons name={icon} size={s.icon} color={foreground} />
+        )}
+
+        <Text style={[text[s.variant], { color: foreground }]} numberOfLines={1}>
+          {children}
+        </Text>
+
+        {!loading && icon && iconPosition === 'right' && (
+          <Ionicons name={icon} size={s.icon} color={foreground} />
+        )}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+interface IconButtonProps {
+  icon: IoniconName;
+  onPress: () => void;
+  accessibilityLabel: string;
+  /** Диаметр зоны нажатия. Меньше 48 не ставить без веской причины. */
+  size?: number;
+  color?: string;
+  background?: string;
+  disabled?: boolean;
+  style?: StyleProp<ViewStyle>;
+}
+
+/** Круглая кнопка с одной иконкой: позвонить, открыть навигатор, закрыть. */
+export function IconButton({
+  icon,
+  onPress,
+  accessibilityLabel,
+  size = touch.min,
+  color,
+  background,
+  disabled = false,
+  style,
+}: IconButtonProps) {
+  const { colors } = useTheme();
+  const scale = useSharedValue(1);
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
+  return (
+    <Animated.View style={animStyle}>
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        onPressIn={() => {
+          scale.value = withSpring(PRESS_SCALE, spring.snappy);
+        }}
+        onPressOut={() => {
+          scale.value = withSpring(1, spring.snappy);
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityState={{ disabled }}
+        style={[
+          {
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: background ?? colors.surfaceSunken,
+            opacity: disabled ? 0.5 : 1,
+          },
+          style,
+        ]}
+      >
+        <View pointerEvents="none">
+          <Ionicons name={icon} size={size * 0.45} color={color ?? colors.textPrimary} />
+        </View>
+      </Pressable>
+    </Animated.View>
   );
 }

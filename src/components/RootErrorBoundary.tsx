@@ -12,8 +12,10 @@
  */
 
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Appearance, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { driverLogger } from '@/services/logger.service';
+import { THEMES } from '@/lib/design/palette';
+import { useSettingsStore } from '@/stores/settings.store';
 
 interface Props {
   children: React.ReactNode;
@@ -68,36 +70,62 @@ export class RootErrorBoundary extends React.Component<Props, State> {
   }
 }
 
+/**
+ * Стили экрана краха.
+ *
+ * Тема берётся СИНХРОННО, а не хуком: это класс-компонент (иначе
+ * `componentDidCatch` недоступен), и он рисуется в момент, когда дерево
+ * приложения уже упало — полагаться на провайдеры нельзя. `Appearance` и
+ * zustand-стор читаются напрямую, оба доступны без React-контекста.
+ *
+ * Если и это почему-то не сработает — берётся светлая тема: экран краха
+ * обязан отрисоваться при любых условиях.
+ */
+function crashTheme() {
+  try {
+    const mode = useSettingsStore.getState().themeMode ?? 'system';
+    const isDark =
+      mode === 'dark' || (mode === 'system' && Appearance.getColorScheme() === 'dark');
+    return isDark ? THEMES.dark : THEMES.light;
+  } catch {
+    return THEMES.light;
+  }
+}
+
+const t = crashTheme();
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fef2f2',
+    backgroundColor: t.colors.background,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
   },
   title: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '700',
-    color: '#991b1b',
+    color: t.colors.danger,
     marginBottom: 12,
   },
   message: {
-    fontSize: 14,
-    color: '#7f1d1d',
+    fontSize: 16,
+    lineHeight: 22,
+    color: t.colors.textSecondary,
     textAlign: 'center',
     marginBottom: 24,
-    lineHeight: 20,
   },
   button: {
-    backgroundColor: '#4f46e5',
-    paddingVertical: 12,
+    backgroundColor: t.colors.primary,
+    paddingVertical: 14,
     paddingHorizontal: 32,
-    borderRadius: 10,
+    borderRadius: 12,
+    minHeight: 48,
+    justifyContent: 'center',
   },
   buttonText: {
-    color: '#ffffff',
-    fontSize: 15,
+    color: t.colors.textInverse,
+    fontSize: 16,
     fontWeight: '600',
   },
 });

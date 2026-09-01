@@ -41,15 +41,42 @@ export const availableOrderSchema = z.object({
   distanceToPickup: z.number().nullable(),
 });
 
+/**
+ * Мета доступных заказов.
+ *
+ * Все поля НЕОБЯЗАТЕЛЬНЫЕ намеренно. Строгая схема уже стоила нам живого
+ * дефекта: сервер в ветке «водитель занят» присылал только причину отказа,
+ * без `effectiveRadius`/`hasGps`, и разбор валил ВЕСЬ ответ — вместе с той
+ * самой причиной. Сервер починен (v1.99.59), но приложение обязано
+ * переживать неполную мету, а не терять из-за неё всё сообщение.
+ */
 const availableOrdersMetaSchema = z.object({
-  effectiveRadius: z.number(),
-  showOrdersWithoutGps: z.boolean(),
-  hasGps: z.boolean(),
+  effectiveRadius: z.number().optional(),
+  showOrdersWithoutGps: z.boolean().optional(),
+  hasGps: z.boolean().optional(),
+  /**
+   * v1.99.58 на сервере: почему список пуст, если водитель уже занят.
+   * Поля необязательные — приложение старше сервера их не увидит, и
+   * наоборот, приложение новее сервера не должно из-за них падать.
+   */
+  blockedReason: z.string().nullish(),
+  blockedMessage: z.string().nullish(),
 });
 
 export const availableOrdersResponseSchema = z.object({
   items: z.array(availableOrderSchema),
   meta: availableOrdersMetaSchema.optional(),
+});
+
+/**
+ * Список предзаказов водителя.
+ *
+ * Форма та же, что у доступных заказов: предзаказ — обычный заказ, у
+ * которого заполнено `scheduledAt`. Отдельной схемы он не заслуживает,
+ * а расхождение двух схем на одинаковых данных пришлось бы поддерживать.
+ */
+export const scheduledOrdersResponseSchema = z.object({
+  items: z.array(availableOrderSchema),
 });
 
 export const currentOrderSchema = z.object({
@@ -88,6 +115,14 @@ export const currentOrderSchema = z.object({
   tariffName: z.string().nullable(),
   // default([]) — защита от отсутствия поля в ответе сервера
   stops: z.array(orderStopSchema).default([]),
+});
+
+/**
+ * Все активные заказы водителя (`GET /driver/orders/active`, сервер
+ * v1.99.59+). Обычно один; два — когда взят встречный заказ.
+ */
+export const activeOrdersResponseSchema = z.object({
+  items: z.array(currentOrderSchema),
 });
 
 export const currentOrderResponseSchema = z.object({

@@ -1,31 +1,62 @@
 /**
  * @file: app/(main)/(tabs)/earnings.tsx
  * @description:
- *   Экран заработка водителя: сводка за период (сегодня/неделя/месяц),
- *   общая статистика, список недавних поездок.
- * @dependencies: useEarnings
+ *   Экран «Деньги»: баланс, заработок за период, график по дням, последние
+ *   поездки и вход в историю операций.
+ *
+ *   ЧТО ИЗМЕНИЛОСЬ В v1.5.17.
+ *   • Экран переехал из бокового меню в нижние вкладки. Деньги водитель
+ *     смотрит каждую смену — прятать их за гамбургером не за что.
+ *   • Баланс теперь настоящий (из профиля). Раньше на карточке под
+ *     подписью «Баланс» стояла сумма ВСЕГО заработанного за всё время —
+ *     цифра в разы больше той, что можно вывести.
+ *   • Кнопка «Вывести» перестала быть заглушкой `TODO`. Вывод средств на
+ *     сервере реализован полностью (`/api/v1/driver/payout`), но в
+ *     приложении кнопка не делала ничего — водитель физически не мог
+ *     забрать деньги из приложения.
+ *   • График строится по данным сервера, а не по `Math.random()`.
+ *
+ * @dependencies: useEarnings, useDriverProfile, @/components/earnings/*,
+ *                @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-09-01 (v1.5.17 — «Деньги»: настоящий баланс, вывод, реальный график)
  */
 
 import { useState, useMemo } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  FlatList,
-  RefreshControl,
-  ActivityIndicator,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useEarnings } from '@/hooks/useEarnings';
+import { useDriverProfile } from '@/hooks/useDriverProfile';
 import { formatCurrency, formatTime } from '@/lib/utils';
 import { BalanceCard } from '@/components/earnings/BalanceCard';
 import { EarningsChart } from '@/components/earnings/EarningsChart';
+import {
+  AppText,
+  Divider,
+  EarningsSkeleton,
+  EmptyState,
+  ScalePress,
+  Screen,
+  Segmented,
+  Surface,
+} from '@/components/ui';
+import { icon as iconTokens, spacing, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
 import type { RecentOrder } from '@/types/earnings';
 
 type Period = 'today' | 'week' | 'month';
+
+const PERIOD_LABELS: Record<Period, string> = {
+  today: 'Сегодня',
+  week: 'Неделя',
+  month: 'Месяц',
+};
+
+const PAYMENT_LABEL: Record<string, string> = {
+  cash: 'Наличные',
+  card: 'Карта',
+  bonus: 'Бонусы',
+};
 
 /**
  * v1.5.5 fix: раньше отправляли `date.toISOString().slice(0, 10)` →
@@ -57,341 +88,187 @@ function getDateRange(period: Period): { dateFrom: string; dateTo: string } {
   return { dateFrom: from.toISOString(), dateTo: to.toISOString() };
 }
 
-const PERIOD_LABELS: Record<Period, string> = {
-  today: 'Сегодня',
-  week: 'Неделя',
-  month: 'Месяц',
-};
-
 export default function EarningsScreen() {
+  const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+
   const [period, setPeriod] = useState<Period>('today');
   const { dateFrom, dateTo } = useMemo(() => getDateRange(period), [period]);
-  const { data, isLoading, refetch } = useEarnings(dateFrom, dateTo);
+  const { data, isLoading, refetch, isRefetching } = useEarnings(dateFrom, dateTo);
+  const { data: profile } = useDriverProfile();
 
-  const renderOrder = ({ item }: { item: RecentOrder }) => (
-    <View style={styles.orderRow}>
-      <View style={styles.orderLeft}>
-        <Text style={styles.orderAddress} numberOfLines={1}>
-          {item.pickupAddress}
-        </Text>
-        <Text style={styles.orderMeta}>
-          {formatTime(item.completedAt)} · #{item.orderNumber} ·{' '}
-          {item.paymentMethod === 'cash'
-            ? 'Наличные'
-            : item.paymentMethod === 'card'
-              ? 'Карта'
-              : 'Бонусы'}
-        </Text>
-      </View>
-      <Text style={styles.orderPrice}>
-        {formatCurrency(item.finalPrice)}
-      </Text>
+  const daily = data?.daily ?? [];
+
+  const header = (
+    <View style={styles.header}>
+      <BalanceCard
+        balance={profile?.balance ?? 0}
+        periodEarnings={data?.period.totalEarnings}
+        periodLabel={PERIOD_LABELS[period]}
+        onWithdraw={() => router.push('/(main)/payout' as never)}
+      />
+
+      <Segmented<Period>
+        value={period}
+        onChange={setPeriod}
+        options={[
+          { value: 'today', label: PERIOD_LABELS.today },
+          { value: 'week', label: PERIOD_LABELS.week },
+          { value: 'month', label: PERIOD_LABELS.month },
+        ]}
+      />
+
+      <Surface level={1} padded={false} style={styles.stats}>
+        <Stat
+          label="Заработок"
+          value={formatCurrency(data?.period.totalEarnings ?? 0)}
+          icon="cash-outline"
+          accent={colors.success}
+        />
+        <Divider vertical size={36} />
+        <Stat
+          label="Поездок"
+          value={String(data?.period.tripsCount ?? 0)}
+          icon="car-outline"
+          accent={colors.primary}
+        />
+        <Divider vertical size={36} />
+        <Stat
+          label="Средний чек"
+          value={formatCurrency(data?.period.averagePrice ?? 0)}
+          icon="trending-up-outline"
+          accent={colors.info}
+        />
+      </Surface>
+
+      {/* График показывается, только если сервер прислал разбивку по дням.
+          Пустое место честнее выдуманных столбцов — см. EarningsChart. */}
+      {daily.length > 0 && <EarningsChart data={daily} title={`Заработок · ${PERIOD_LABELS[period].toLowerCase()}`} />}
+
+      <ScalePress
+        onPress={() => router.push('/(main)/balance' as never)}
+        accessibilityLabel="История операций"
+      >
+        <Surface level={1} style={styles.historyRow}>
+          <Ionicons name="receipt-outline" size={iconTokens.md} color={colors.textSecondary} />
+          <AppText variant="body" style={styles.historyLabel}>
+            История операций
+          </AppText>
+          <Ionicons name="chevron-forward" size={iconTokens.sm} color={colors.textMuted} />
+        </Surface>
+      </ScalePress>
+
+      <AppText variant="overline" tone="muted" style={styles.tripsTitle}>
+        Последние поездки
+      </AppText>
     </View>
   );
 
-  // Данные для графика (заглушка — 7 дней)
-  const chartData = useMemo(() => {
-    const days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-    const now = new Date();
-    return days.map((label, i) => ({
-      label,
-      amount: i <= now.getDay() ? Math.random() * (data?.period.totalEarnings || 1000) / 3 : 0,
-    }));
-  }, [data?.period.totalEarnings]);
-
-  const ListHeader = () => (
-    <>
-      {/* Баланс */}
-      <BalanceCard
-        balance={data?.overall.totalEarnings ?? 0}
-        onWithdraw={() => {/* TODO */}}
-      />
-
-      {/* Переключатель периода */}
-      <View style={styles.periodTabs}>
-        {(['today', 'week', 'month'] as Period[]).map((p) => (
-          <TouchableOpacity
-            key={p}
-            style={[styles.periodTab, period === p && styles.periodTabActive]}
-            onPress={() => setPeriod(p)}
-          >
-            <Text
-              style={[
-                styles.periodTabText,
-                period === p && styles.periodTabTextActive,
-              ]}
-            >
-              {PERIOD_LABELS[p]}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Сводка за период */}
-      {isLoading && !data ? (
-        <View style={styles.loadingCard}>
-          <ActivityIndicator size="large" color="#4f46e5" />
+  if (isLoading && !data) {
+    return (
+      <Screen>
+        <View style={styles.loading}>
+          <EarningsSkeleton />
         </View>
-      ) : data ? (
-        <>
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryAmount}>
-              {formatCurrency(data.period.totalEarnings)}
-            </Text>
-            <Text style={styles.summaryLabel}>
-              за {PERIOD_LABELS[period].toLowerCase()}
-            </Text>
-
-            <View style={styles.summaryRow}>
-              <SummaryItem
-                label="Поездок"
-                value={String(data.period.tripsCount)}
-              />
-              <SummaryItem
-                label="Средний чек"
-                value={formatCurrency(data.period.averagePrice)}
-              />
-            </View>
-          </View>
-
-          {/* График по дням */}
-          <EarningsChart data={chartData} title="Заработок по дням" />
-
-          {/* Общая статистика */}
-          <View style={styles.overallCard}>
-            <Text style={styles.overallTitle}>Общая статистика</Text>
-            <View style={styles.overallRow}>
-              <OverallItem
-                label="Всего поездок"
-                value={String(data.overall.totalTrips)}
-              />
-              <OverallItem
-                label="Всего заработано"
-                value={formatCurrency(data.overall.totalEarnings)}
-              />
-              <OverallItem
-                label="Рейтинг"
-                value={data.overall.rating.toFixed(1)}
-              />
-            </View>
-          </View>
-
-          {/* Заголовок списка */}
-          {data.recentOrders.length > 0 && (
-            <Text style={styles.recentTitle}>Последние поездки</Text>
-          )}
-        </>
-      ) : null}
-    </>
-  );
+      </Screen>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <Screen>
       <FlatList
         data={data?.recentOrders ?? []}
-        renderItem={renderOrder}
         keyExtractor={(item) => item.id}
-        ListHeaderComponent={ListHeader}
+        ListHeaderComponent={header}
         contentContainerStyle={styles.list}
+        renderItem={({ item }) => <TripRow order={item} />}
+        ItemSeparatorComponent={() => <Divider />}
         refreshControl={
           <RefreshControl
-            refreshing={isLoading}
+            refreshing={isRefetching}
             onRefresh={() => void refetch()}
-            tintColor="#4f46e5"
+            tintColor={colors.primary}
+            colors={[colors.primary]}
           />
         }
         ListEmptyComponent={
-          !isLoading ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>
-                Нет поездок за этот период
-              </Text>
-            </View>
-          ) : null
+          <EmptyState
+            icon="calendar-outline"
+            title="Поездок нет"
+            description={`За период «${PERIOD_LABELS[period].toLowerCase()}» завершённых заказов не было`}
+            style={styles.empty}
+          />
         }
       />
-    </SafeAreaView>
+    </Screen>
   );
 }
 
-/* ─── Вспомогательные компоненты ──────────────────────────────────────── */
+function Stat({
+  label,
+  value,
+  icon,
+  accent,
+}: {
+  label: string;
+  value: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  accent: string;
+}) {
+  const styles = useThemedStyles(createStyles);
 
-function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
-    <View style={styles.summaryItem}>
-      <Text style={styles.summaryItemValue}>{value}</Text>
-      <Text style={styles.summaryItemLabel}>{label}</Text>
+    <View style={styles.stat}>
+      <Ionicons name={icon} size={iconTokens.md} color={accent} />
+      <AppText variant="bodyStrong" numberOfLines={1}>
+        {value}
+      </AppText>
+      <AppText variant="caption" tone="muted">
+        {label}
+      </AppText>
     </View>
   );
 }
 
-function OverallItem({ label, value }: { label: string; value: string }) {
+function TripRow({ order }: { order: RecentOrder }) {
+  const styles = useThemedStyles(createStyles);
+
   return (
-    <View style={styles.overallItem}>
-      <Text style={styles.overallItemValue}>{value}</Text>
-      <Text style={styles.overallItemLabel}>{label}</Text>
+    <View style={styles.trip}>
+      <View style={styles.tripLeft}>
+        <AppText variant="body" numberOfLines={1}>
+          {order.pickupAddress}
+        </AppText>
+        <AppText variant="caption" tone="muted">
+          {formatTime(order.completedAt)} · № {order.orderNumber} ·{' '}
+          {PAYMENT_LABEL[order.paymentMethod] ?? order.paymentMethod}
+        </AppText>
+      </View>
+      <AppText variant="bodyStrong" tone="success">
+        {formatCurrency(order.finalPrice)}
+      </AppText>
     </View>
   );
 }
 
-/* ─── Стили ─────────────────────────────────────────────────────────── */
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f3f4f6',
-  },
-  list: {
-    padding: 16,
-    gap: 12,
-  },
-
-  // Period tabs
-  periodTabs: {
-    flexDirection: 'row',
-    backgroundColor: '#e5e7eb',
-    borderRadius: 10,
-    padding: 3,
-  },
-  periodTab: {
-    flex: 1,
-    paddingVertical: 8,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  periodTabActive: {
-    backgroundColor: '#ffffff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  periodTabText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#6b7280',
-  },
-  periodTabTextActive: {
-    color: '#4f46e5',
-  },
-
-  // Summary
-  summaryCard: {
-    backgroundColor: '#4f46e5',
-    borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
-  },
-  summaryAmount: {
-    fontSize: 36,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  summaryLabel: {
-    fontSize: 14,
-    color: '#c7d2fe',
-    marginTop: 4,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    marginTop: 20,
-    gap: 32,
-  },
-  summaryItem: {
-    alignItems: 'center',
-  },
-  summaryItemValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  summaryItemLabel: {
-    fontSize: 12,
-    color: '#c7d2fe',
-    marginTop: 2,
-  },
-
-  // Overall
-  overallCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 16,
-  },
-  overallTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 12,
-  },
-  overallRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  overallItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  overallItemValue: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  overallItemLabel: {
-    fontSize: 11,
-    color: '#9ca3af',
-    marginTop: 2,
-  },
-
-  // Recent orders
-  recentTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  orderRow: {
-    backgroundColor: '#ffffff',
-    borderRadius: 10,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  orderLeft: {
-    flex: 1,
-    marginRight: 12,
-  },
-  orderAddress: {
-    fontSize: 14,
-    color: '#374151',
-    fontWeight: '500',
-  },
-  orderMeta: {
-    fontSize: 12,
-    color: '#9ca3af',
-    marginTop: 2,
-  },
-  orderPrice: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-  },
-
-  // Loading
-  loadingCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 48,
-    alignItems: 'center',
-  },
-
-  // Empty
-  emptyState: {
-    padding: 32,
-    alignItems: 'center',
-  },
-  emptyText: {
-    fontSize: 14,
-    color: '#9ca3af',
-  },
-});
+const createStyles = (_t: Theme) =>
+  StyleSheet.create({
+    list: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+    loading: { padding: spacing.lg },
+    header: { gap: spacing.lg, marginBottom: spacing.md },
+    stats: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.lg },
+    stat: { flex: 1, alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.xs },
+    historyRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    historyLabel: { flex: 1 },
+    tripsTitle: { marginTop: spacing.sm },
+    trip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.md,
+      paddingVertical: spacing.md,
+    },
+    tripLeft: { flex: 1, gap: 2 },
+    empty: { paddingVertical: spacing.xxxl },
+  });

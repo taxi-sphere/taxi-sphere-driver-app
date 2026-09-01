@@ -2,15 +2,23 @@
  * @file: src/hooks/useOrderActions.ts
  * @description:
  *   Hook для мутаций заказа: принять, прибыл, начать, завершить.
- * @dependencies: orders.api, react-query
+ *
+ *   v1.5.17: завершение заказа больше не сбрасывает водителя в «online»
+ *   безусловно. При встречном заказе активных заказов ДВА, и завершение
+ *   первого не означает конец смены — статус выводится из того, остались
+ *   ли заказы (`useActiveOrders`), а не назначается здесь.
+ *
+ * @dependencies: orders.api, react-query, useCurrentOrder (useActiveOrders)
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-09-01 (v1.5.17 — поддержка встречного заказа)
  */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import * as ordersApi from '@/api/orders.api';
 import { useDriverStore } from '@/stores/driver.store';
 import { driverLogger } from '@/services/logger.service';
+import { activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
+import type { CurrentOrder } from '@/types/order';
 
 /** Типизированный wrapper для логирования ошибок мутации */
 function logMutationError(action: string, err: unknown, orderId?: string) {
@@ -76,10 +84,16 @@ export function useOrderActions() {
         action: 'complete_order',
         extra: { orderId: vars.orderId, finalPrice: vars.finalPrice ?? null },
       });
-      // Сбрасываем кэш текущего заказа СРАЗУ, чтобы placeholderData
-      // не удерживал старые данные и useCurrentOrder не дёргал статус обратно
-      queryClient.setQueryData(['orders', 'current'], null);
-      setStatus('online');
+      // Убираем завершённый заказ из кэша СРАЗУ, чтобы placeholderData не
+      // удерживал старые данные и экран не мигал завершённым заказом.
+      //
+      // Именно убираем один, а не обнуляем весь список: при встречном
+      // заказе второй остаётся активным, и водитель должен продолжить его
+      // выполнять. Статус тоже больше не назначается здесь — его выведет
+      // `useActiveOrders` по тому, остались ли заказы.
+      queryClient.setQueryData<CurrentOrder[]>(activeOrdersQueryKey, (prev) =>
+        (prev ?? []).filter((order) => order.id !== vars.orderId),
+      );
       invalidateOrders();
       void queryClient.invalidateQueries({ queryKey: ['driver', 'profile'] });
       void queryClient.invalidateQueries({ queryKey: ['earnings'] });

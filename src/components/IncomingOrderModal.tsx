@@ -21,8 +21,15 @@
  *   однострочный адрес обрезался ровно на доме и подъезде, то есть на том,
  *   ради чего водитель в него и смотрит.
  *
+ *   v1.5.17: модалка перешла на общую тему приложения. До этого у неё была
+ *   СВОЯ палитра — синий #137fec, фон #192633, серо-голубой текст #92adc9 —
+ *   не совпадающая ни с одним другим экраном. Модалка выглядела частью
+ *   другого продукта, а в светлой теме оставалась тёмной. Логика (таймер,
+ *   селектор подачи, автоповтор удержания) не менялась.
+ *
  * @dependencies:
  *   - react-native-svg
+ *   - @/lib/theme, @/lib/haptics
  *   - @/types/order
  *   - @/lib/utils (splitAddressEntrance, stripSharedCityPrefix,
  *     pickupEtaStep, pickupEtaPresets)
@@ -49,6 +56,15 @@ import {
   pickupEtaStep,
   stripSharedCityPrefix,
 } from '@/lib/utils';
+import { haptics } from '@/lib/haptics';
+import {
+  radius,
+  spacing,
+  text,
+  useTheme,
+  useThemedStyles,
+  type Theme,
+} from '@/lib/theme';
 
 /** Режим модалки */
 export type IncomingOrderMode = 'confirm' | 'offer';
@@ -97,6 +113,7 @@ function CircularTimer({
   remaining: number;
   total: number;
 }) {
+  const { colors } = useTheme();
   const progress = Math.max(0, Math.min(1, remaining / total));
   const offset = RING_CIRCUMFERENCE * (1 - progress);
   return (
@@ -111,7 +128,7 @@ function CircularTimer({
         cx={RING_SIZE / 2}
         cy={RING_SIZE / 2}
         r={RING_RADIUS}
-        stroke="#233648"
+        stroke={colors.border}
         strokeWidth={RING_STROKE}
         fill="transparent"
       />
@@ -119,7 +136,7 @@ function CircularTimer({
         cx={RING_SIZE / 2}
         cy={RING_SIZE / 2}
         r={RING_RADIUS}
-        stroke="#137fec"
+        stroke={colors.primary}
         strokeWidth={RING_STROKE}
         strokeLinecap="round"
         strokeDasharray={`${RING_CIRCUMFERENCE}`}
@@ -146,6 +163,8 @@ function EtaSelector({
   presets: number[];
   disabled?: boolean;
 }) {
+  const { colors } = useTheme();
+  const etaStyles = useThemedStyles(createEtaStyles);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -243,7 +262,7 @@ function EtaSelector({
           disabled={disabled || editing || value <= MIN_ETA}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
-          <Ionicons name="remove" size={24} color="#ffffff" />
+          <Ionicons name="remove" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
 
         {editing ? (
@@ -285,7 +304,7 @@ function EtaSelector({
           disabled={disabled || editing || value >= MAX_ETA}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
-          <Ionicons name="add" size={24} color="#ffffff" />
+          <Ionicons name="add" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
       </View>
 
@@ -329,6 +348,8 @@ export function IncomingOrderModal({
   onAccept,
   onDismiss,
 }: IncomingOrderModalProps) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [etaMin, setEtaMin] = useState<number>(initialEtaMin ?? 5);
   const [remaining, setRemaining] = useState<number>(timerSec);
   const pulse = useRef(new Animated.Value(0)).current;
@@ -367,6 +388,18 @@ export function IncomingOrderModal({
       setRemaining(timerSec);
     }
   }, [visible, timerSec]);
+
+  /**
+   * Вибрация при заказе от диспетчера (`offer`). Телефон водителя часто
+   * лежит в держателе экраном в сторону — предложение легко пропустить, а
+   * на него даётся 15 секунд. Для режима `confirm` вибрации нет: там
+   * водитель сам только что нажал на заказ и смотрит в экран.
+   */
+  useEffect(() => {
+    if (!visible || mode !== 'offer') return;
+    haptics.incoming();
+    return () => haptics.stop();
+  }, [visible, mode]);
 
   // Обновление eta при загрузке рекомендации с сервера
   useEffect(() => {
@@ -448,7 +481,7 @@ export function IncomingOrderModal({
           <View style={styles.header}>
             <View style={styles.headerLeft}>
               <View style={styles.radarIcon}>
-                <Ionicons name="radio" size={20} color="#137fec" />
+                <Ionicons name="radio" size={20} color={colors.primary} />
               </View>
               <View>
                 <Text style={styles.headerTitle}>
@@ -466,7 +499,7 @@ export function IncomingOrderModal({
                 </View>
               )}
               <View style={styles.paymentRow}>
-                <Ionicons name={paymentLabel.icon} size={14} color="#92adc9" />
+                <Ionicons name={paymentLabel.icon} size={14} color={colors.textMuted} />
                 <Text style={styles.paymentText}>{paymentLabel.text}</Text>
               </View>
             </View>
@@ -490,7 +523,7 @@ export function IncomingOrderModal({
                 <View style={styles.routeLabelRow}>
                   <Text style={styles.routeLabel}>ОТКУДА</Text>
                   {etaLoading ? (
-                    <ActivityIndicator size="small" color="#137fec" />
+                    <ActivityIndicator size="small" color={colors.primary} />
                   ) : (
                     // «подача» в подписи обязательна: рядом с адресом голое
                     // «~N мин» читается как время поездки, а это время подачи.
@@ -563,7 +596,10 @@ export function IncomingOrderModal({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Принять заказ с временем подачи ${etaMin} минут`}
-                onPress={() => onAccept(etaMin)}
+                onPress={() => {
+                  haptics.confirm();
+                  onAccept(etaMin);
+                }}
                 disabled={accepting}
                 style={({ pressed }) => [
                   styles.acceptBtn,
@@ -572,7 +608,7 @@ export function IncomingOrderModal({
                 ]}
               >
                 {accepting ? (
-                  <ActivityIndicator color="#ffffff" size="large" />
+                  <ActivityIndicator color={colors.textInverse} size="large" />
                 ) : (
                   <>
                     <Text style={styles.acceptBtnText}>Принять</Text>
@@ -585,11 +621,14 @@ export function IncomingOrderModal({
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel="Пропустить заказ"
-              onPress={onDismiss}
+              onPress={() => {
+                haptics.stop();
+                onDismiss();
+              }}
               disabled={accepting}
               style={styles.skipBtn}
             >
-              <Ionicons name="close" size={18} color="#58738e" />
+              <Ionicons name="close" size={18} color={colors.textMuted} />
               <Text style={styles.skipBtnText}>Пропустить</Text>
             </TouchableOpacity>
           </View>
@@ -603,323 +642,239 @@ export function IncomingOrderModal({
 /*  Стили                                                                      */
 /* -------------------------------------------------------------------------- */
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(17, 26, 34, 0.88)',
-    justifyContent: 'flex-end',
-    padding: 16,
-  },
-  card: {
-    backgroundColor: '#192633',
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#324d67',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 18,
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    gap: 12,
-    alignItems: 'center',
-    flex: 1,
-  },
-  radarIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(19,127,236,0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  headerSubtitle: {
-    color: '#92adc9',
-    fontSize: 11,
-    fontWeight: '500',
-    marginTop: 1,
-  },
-  headerRight: {
-    alignItems: 'flex-end',
-    gap: 4,
-  },
-  tariffBadge: {
-    backgroundColor: '#324d67',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  tariffText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  paymentRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  paymentText: {
-    color: '#92adc9',
-    fontSize: 11,
-  },
-  routeRow: {
-    flexDirection: 'row',
-    gap: 14,
-    marginBottom: 16,
-  },
-  routeDots: {
-    alignItems: 'center',
-    paddingTop: 6,
-    width: 12,
-  },
-  dotPickup: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: '#137fec',
-    backgroundColor: '#192633',
-  },
-  routeLine: {
-    flex: 1,
-    width: 2,
-    backgroundColor: '#324d67',
-    marginVertical: 4,
-  },
-  dotDropoff: {
-    width: 10,
-    height: 10,
-    backgroundColor: '#ffffff',
-    transform: [{ rotate: '45deg' }],
-  },
-  routeInfo: {
-    flex: 1,
-    gap: 10,
-  },
-  routeLabelRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'baseline',
-    marginBottom: 2,
-  },
-  routeLabel: {
-    color: '#92adc9',
-    fontSize: 10,
-    fontWeight: '500',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  routeEta: {
-    color: '#137fec',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  routeAddress: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  routeAddressStop: {
-    color: '#c8d9e8',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  dotStop: {
-    width: 8,
-    height: 8,
-    backgroundColor: '#f59e0b',
-    transform: [{ rotate: '45deg' }],
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#324d67',
-    marginBottom: 16,
-  },
-  priceRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  priceLabel: {
-    color: '#92adc9',
-    fontSize: 11,
-    marginBottom: 2,
-  },
-  priceValue: {
-    color: '#ffffff',
-    fontSize: 28,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-  },
-  distance: {
-    alignItems: 'flex-end',
-  },
-  distanceValue: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  ctaWrap: {
-    alignItems: 'center',
-    gap: 12,
-    marginTop: 4,
-  },
-  ringWrap: {
-    width: RING_SIZE,
-    height: RING_SIZE,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  pulseRing: {
-    position: 'absolute',
-    width: RING_SIZE - 16,
-    height: RING_SIZE - 16,
-    borderRadius: (RING_SIZE - 16) / 2,
-    backgroundColor: 'rgba(19,127,236,0.3)',
-  },
-  acceptBtn: {
-    width: RING_SIZE - 24,
-    height: RING_SIZE - 24,
-    borderRadius: (RING_SIZE - 24) / 2,
-    backgroundColor: '#137fec',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#137fec',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  acceptBtnPressed: {
-    transform: [{ scale: 0.95 }],
-    backgroundColor: '#0f6bd1',
-  },
-  acceptBtnDisabled: {
-    opacity: 0.7,
-  },
-  acceptBtnText: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  acceptBtnTimer: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  skipBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 999,
-  },
-  skipBtnText: {
-    color: '#58738e',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-});
+/**
+ * Стили модалки.
+ *
+ * Собраны фабрикой от темы: прежняя версия жила на собственной тёмной
+ * палитре и в светлой теме оставалась тёмной, а рядом с остальными
+ * экранами читалась как чужая. Размеры подписей подняты с 10-11px до 12px —
+ * решение о заказе принимается за 15 секунд, и мелкий текст здесь дороже
+ * всего.
+ */
+const createStyles = (t: Theme) =>
+  StyleSheet.create({
+    backdrop: {
+      flex: 1,
+      backgroundColor: t.colors.scrim,
+      justifyContent: 'flex-end',
+      padding: spacing.lg,
+    },
+    card: {
+      backgroundColor: t.colors.surface,
+      borderRadius: radius.xl,
+      padding: spacing.xl,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      shadowColor: t.colors.shadow,
+      shadowOffset: { width: 0, height: -6 },
+      shadowOpacity: t.isDark ? 0.5 : 0.18,
+      shadowRadius: 24,
+      elevation: 20,
+    },
+    header: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      marginBottom: spacing.lg,
+    },
+    headerLeft: { flexDirection: 'row', gap: spacing.md, alignItems: 'center', flex: 1 },
+    radarIcon: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: t.colors.primarySoft,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    headerTitle: { color: t.colors.textPrimary, ...text.heading },
+    headerSubtitle: { color: t.colors.textMuted, ...text.caption, marginTop: 1 },
+    headerRight: { alignItems: 'flex-end', gap: spacing.xs },
+    tariffBadge: {
+      backgroundColor: t.colors.surfaceSunken,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs,
+      borderRadius: radius.sm,
+    },
+    tariffText: {
+      color: t.colors.textSecondary,
+      ...text.caption,
+      fontWeight: '700',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    paymentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+    paymentText: { color: t.colors.textMuted, ...text.caption },
 
-const etaStyles = StyleSheet.create({
-  wrap: {
-    backgroundColor: '#233648',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 16,
-  },
-  label: {
-    color: '#92adc9',
-    fontSize: 11,
-    fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  stepper: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 14,
-    marginBottom: 8,
-  },
-  stepBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#324d67',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  stepBtnDisabled: {
-    opacity: 0.4,
-  },
-  valueBox: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 4,
-    minWidth: 80,
-    justifyContent: 'center',
-  },
-  valueText: {
-    color: '#ffffff',
-    fontSize: 32,
-    fontWeight: '800',
-  },
-  // Поле ручного ввода держит те же метрики, что и текст значения, — иначе
-  // при тапе стоящий рядом блок пресетов подпрыгивает.
-  valueInput: {
-    color: '#ffffff',
-    fontSize: 32,
-    fontWeight: '800',
-    minWidth: 56,
-    paddingVertical: 0,
-    textAlign: 'center',
-    borderBottomWidth: 2,
-    borderBottomColor: '#137fec',
-  },
-  valueUnit: {
-    color: '#92adc9',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  presets: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  preset: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: '#324d67',
-  },
-  presetActive: {
-    backgroundColor: '#137fec',
-  },
-  presetText: {
-    color: '#92adc9',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  presetTextActive: {
-    color: '#ffffff',
-  },
-});
+    routeRow: { flexDirection: 'row', gap: spacing.lg, marginBottom: spacing.lg },
+    routeDots: { alignItems: 'center', paddingTop: 6, width: 12 },
+    dotPickup: {
+      width: 12,
+      height: 12,
+      borderRadius: 6,
+      borderWidth: 2,
+      borderColor: t.colors.pointPickup,
+      backgroundColor: t.colors.surface,
+    },
+    routeLine: { flex: 1, width: 2, backgroundColor: t.colors.border, marginVertical: spacing.xs },
+    dotStop: {
+      width: 8,
+      height: 8,
+      backgroundColor: t.colors.pointStop,
+      transform: [{ rotate: '45deg' }],
+    },
+    dotDropoff: {
+      width: 10,
+      height: 10,
+      backgroundColor: t.colors.pointDropoff,
+      transform: [{ rotate: '45deg' }],
+    },
+    routeInfo: { flex: 1, gap: spacing.md },
+    routeLabelRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'baseline',
+      marginBottom: 2,
+    },
+    routeLabel: { color: t.colors.textMuted, ...text.overline },
+    routeEta: { color: t.colors.primary, ...text.caption, fontWeight: '700' },
+    routeAddress: { color: t.colors.textPrimary, ...text.subheading },
+    routeAddressStop: { color: t.colors.textSecondary, ...text.body, fontWeight: '600' },
+
+    divider: { height: 1, backgroundColor: t.colors.border, marginBottom: spacing.lg },
+
+    priceRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: spacing.lg,
+    },
+    priceLabel: { color: t.colors.textMuted, ...text.caption, marginBottom: 2 },
+    priceValue: {
+      color: t.colors.success,
+      ...text.display,
+      fontWeight: '800',
+      letterSpacing: -0.5,
+    },
+    distance: { alignItems: 'flex-end' },
+    distanceValue: { color: t.colors.textPrimary, ...text.heading },
+
+    ctaWrap: { alignItems: 'center', gap: spacing.md, marginTop: spacing.xs },
+    ringWrap: {
+      width: RING_SIZE,
+      height: RING_SIZE,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    pulseRing: {
+      position: 'absolute',
+      width: RING_SIZE - 16,
+      height: RING_SIZE - 16,
+      borderRadius: (RING_SIZE - 16) / 2,
+      backgroundColor: t.colors.primarySoft,
+    },
+    acceptBtn: {
+      width: RING_SIZE - 24,
+      height: RING_SIZE - 24,
+      borderRadius: (RING_SIZE - 24) / 2,
+      backgroundColor: t.colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      shadowColor: t.colors.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.4,
+      shadowRadius: 12,
+      elevation: 8,
+    },
+    acceptBtnPressed: { transform: [{ scale: 0.95 }], backgroundColor: t.colors.primaryDark },
+    acceptBtnDisabled: { opacity: 0.7 },
+    acceptBtnText: {
+      color: t.colors.textInverse,
+      ...text.heading,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+    },
+    acceptBtnTimer: {
+      color: 'rgba(255, 255, 255, 0.85)',
+      ...text.caption,
+      fontWeight: '600',
+      marginTop: 2,
+    },
+    skipBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.xl,
+      borderRadius: radius.pill,
+    },
+    skipBtnText: { color: t.colors.textMuted, ...text.label, fontWeight: '600' },
+  });
+
+const createEtaStyles = (t: Theme) =>
+  StyleSheet.create({
+    wrap: {
+      backgroundColor: t.colors.surfaceSunken,
+      borderRadius: radius.md,
+      padding: spacing.md,
+      marginBottom: spacing.lg,
+    },
+    label: {
+      color: t.colors.textMuted,
+      ...text.overline,
+      marginBottom: spacing.sm,
+      textAlign: 'center',
+    },
+    stepper: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: spacing.lg,
+      marginBottom: spacing.sm,
+    },
+    // 44 вместо прежних 36: кнопки шага жмут пальцем в движении, и
+    // промахнуться по ним стоило водителю неверного времени подачи.
+    stepBtn: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: t.colors.surface,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    stepBtnDisabled: { opacity: 0.4 },
+    valueBox: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      gap: spacing.xs,
+      minWidth: 80,
+      justifyContent: 'center',
+    },
+    valueText: { color: t.colors.textPrimary, fontSize: 32, fontWeight: '800' },
+    // Поле ручного ввода держит те же метрики, что и текст значения, — иначе
+    // при тапе стоящий рядом блок пресетов подпрыгивает.
+    valueInput: {
+      color: t.colors.textPrimary,
+      fontSize: 32,
+      fontWeight: '800',
+      minWidth: 56,
+      paddingVertical: 0,
+      textAlign: 'center',
+      borderBottomWidth: 2,
+      borderBottomColor: t.colors.primary,
+    },
+    valueUnit: { color: t.colors.textMuted, ...text.label, fontWeight: '600' },
+    presets: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm },
+    preset: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderRadius: radius.sm,
+      backgroundColor: t.colors.surface,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+    },
+    presetActive: { backgroundColor: t.colors.primary, borderColor: t.colors.primary },
+    presetText: { color: t.colors.textSecondary, ...text.label, fontWeight: '700' },
+    presetTextActive: { color: t.colors.textInverse },
+  });

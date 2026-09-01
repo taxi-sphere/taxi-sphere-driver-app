@@ -1,13 +1,21 @@
 /**
- * Анимационные обёртки на Reanimated:
- * - FadeIn — плавное появление
- * - SlideUp — появление снизу
- * - PulseButton — пульсирующая кнопка
- * - ScalePress — уменьшение при нажатии
+ * @file: src/components/ui/Animated.tsx
+ * @description:
+ *   Анимационные обёртки: появление, каскад по списку, отклик на нажатие,
+ *   привлечение внимания.
+ *
+ *   Все длительности и пружины берутся из `@/lib/design/motion`. До
+ *   v1.5.17 здесь стояли 300, 400, 600, 800 мс, подобранные по месту, —
+ *   такой разнобой глазом читается не как «разные числа», а как общая
+ *   небрежность интерфейса.
+ *
+ * @dependencies: react-native-reanimated, @/lib/design/motion, @/lib/theme
+ * @created: 2026-01-24 12:00:00
+ * @updated: 2026-09-01 (v1.5.17 — токены движения)
  */
 
 import React, { useEffect } from 'react';
-import { TouchableOpacity, type ViewStyle } from 'react-native';
+import { Pressable, type ViewStyle, type StyleProp } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -16,176 +24,171 @@ import Animated, {
   withSequence,
   withSpring,
   withDelay,
-  Easing,
   FadeIn as RFadeIn,
   FadeInDown,
   FadeInUp,
   SlideInDown,
   SlideInUp,
-  Layout,
+  LinearTransition,
 } from 'react-native-reanimated';
+import { motion } from '@/lib/design/tokens';
+import { spring, staggerDelay, timing } from '@/lib/design/motion';
 
-// Re-export entering animations for direct use
-export { RFadeIn as ReanimatedFadeIn, FadeInDown, FadeInUp, SlideInDown, SlideInUp, Layout };
+export {
+  RFadeIn as ReanimatedFadeIn,
+  FadeInDown,
+  FadeInUp,
+  SlideInDown,
+  SlideInUp,
+  LinearTransition,
+};
 
-/** Плавное появление с задержкой */
+/** Насколько элемент «проседает» под пальцем. */
+const PRESS_SCALE = 0.96;
+
+/** Плавное появление с лёгким подъёмом снизу. */
 export function FadeIn({
   children,
   delay = 0,
-  duration = 300,
   style,
 }: {
   children: React.ReactNode;
   delay?: number;
-  duration?: number;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }) {
   const opacity = useSharedValue(0);
   const translateY = useSharedValue(8);
 
   useEffect(() => {
-    opacity.value = withDelay(delay, withTiming(1, { duration, easing: Easing.out(Easing.ease) }));
-    translateY.value = withDelay(delay, withTiming(0, { duration, easing: Easing.out(Easing.ease) }));
-  }, [delay, duration, opacity, translateY]);
+    opacity.value = withDelay(delay, withTiming(1, timing.enter));
+    translateY.value = withDelay(delay, withTiming(0, timing.enter));
+  }, [delay, opacity, translateY]);
 
   const animStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
     transform: [{ translateY: translateY.value }],
   }));
 
-  return (
-    <Animated.View style={[animStyle, style]}>
-      {children}
-    </Animated.View>
-  );
+  return <Animated.View style={[animStyle, style]}>{children}</Animated.View>;
 }
 
-/** Появление снизу */
+/** Появление снизу — для панелей и шторок. */
 export function SlideUp({
   children,
   delay = 0,
-  duration = 400,
-  distance = 30,
+  distance = 28,
   style,
 }: {
   children: React.ReactNode;
   delay?: number;
-  duration?: number;
   distance?: number;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }) {
   const opacity = useSharedValue(0);
   const translateY = useSharedValue(distance);
 
   useEffect(() => {
-    opacity.value = withDelay(delay, withTiming(1, { duration }));
-    translateY.value = withDelay(delay, withSpring(0, { damping: 15, stiffness: 120 }));
-  }, [delay, distance, duration, opacity, translateY]);
+    opacity.value = withDelay(delay, withTiming(1, timing.enter));
+    translateY.value = withDelay(delay, withSpring(0, spring.gentle));
+  }, [delay, opacity, translateY]);
 
   const animStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
     transform: [{ translateY: translateY.value }],
   }));
 
-  return (
-    <Animated.View style={[animStyle, style]}>
-      {children}
-    </Animated.View>
-  );
+  return <Animated.View style={[animStyle, style]}>{children}</Animated.View>;
 }
 
-/** Пульсирующая кнопка — привлекает внимание */
+/**
+ * Пульсация — привлекает внимание к одному элементу.
+ *
+ * Пользоваться экономно: если пульсирует два элемента, не привлекает
+ * внимания ни один.
+ */
 export function PulseButton({
   children,
   onPress,
   disabled = false,
   style,
-  pulseColor = 'rgba(79, 70, 229, 0.3)',
 }: {
   children: React.ReactNode;
   onPress: () => void;
   disabled?: boolean;
-  style?: ViewStyle;
-  pulseColor?: string;
+  style?: StyleProp<ViewStyle>;
 }) {
   const scale = useSharedValue(1);
 
   useEffect(() => {
     if (disabled) {
-      scale.value = withTiming(1);
+      scale.value = withTiming(1, timing.fast);
       return;
     }
     scale.value = withRepeat(
       withSequence(
-        withTiming(1.03, { duration: 600, easing: Easing.inOut(Easing.ease) }),
-        withTiming(1, { duration: 600, easing: Easing.inOut(Easing.ease) }),
+        withTiming(1.03, { duration: motion.duration.deliberate }),
+        withTiming(1, { duration: motion.duration.deliberate }),
       ),
       -1,
       true,
     );
   }, [disabled, scale]);
 
-  const animStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
   return (
     <Animated.View style={animStyle}>
-      <TouchableOpacity
-        onPress={onPress}
-        disabled={disabled}
-        activeOpacity={0.8}
-        style={style}
-      >
+      <Pressable onPress={onPress} disabled={disabled} style={style}>
         {children}
-      </TouchableOpacity>
+      </Pressable>
     </Animated.View>
   );
 }
 
-/** Уменьшение при нажатии */
+/** Нажимаемая обёртка с откликом. Для карточек и строк списка. */
 export function ScalePress({
   children,
   onPress,
   disabled = false,
   style,
+  accessibilityLabel,
 }: {
   children: React.ReactNode;
   onPress: () => void;
   disabled?: boolean;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
+  accessibilityLabel?: string;
 }) {
   const scale = useSharedValue(1);
-
-  const animStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  const handlePressIn = () => {
-    scale.value = withSpring(0.95, { damping: 15, stiffness: 200 });
-  };
-
-  const handlePressOut = () => {
-    scale.value = withSpring(1, { damping: 15, stiffness: 200 });
-  };
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
   return (
     <Animated.View style={animStyle}>
-      <TouchableOpacity
+      <Pressable
         onPress={onPress}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
+        onPressIn={() => {
+          scale.value = withSpring(PRESS_SCALE, spring.snappy);
+        }}
+        onPressOut={() => {
+          scale.value = withSpring(1, spring.snappy);
+        }}
         disabled={disabled}
-        activeOpacity={1}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
         style={style}
       >
         {children}
-      </TouchableOpacity>
+      </Pressable>
     </Animated.View>
   );
 }
 
-/** Stagger — последовательное появление элементов списка */
+/**
+ * Элемент списка с каскадной задержкой появления.
+ *
+ * Задержка ограничена сверху (`staggerDelay`): иначе в длинном списке
+ * нижние карточки выезжали бы через полторы секунды после верхних.
+ */
 export function StaggerItem({
   children,
   index,
@@ -193,10 +196,10 @@ export function StaggerItem({
 }: {
   children: React.ReactNode;
   index: number;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }) {
   return (
-    <FadeIn delay={index * 80} style={style}>
+    <FadeIn delay={staggerDelay(index)} style={style}>
       {children}
     </FadeIn>
   );

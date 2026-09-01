@@ -2,10 +2,10 @@
   "expo": {
     "name": "Taxi Sphere Водитель",
     "slug": "taxi-sphere-driver-app",
-    "version": "1.5.16",
+    "version": "1.5.17",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "scheme": "taxi-sphere-driver",
     "splash": {
       "image": "./assets/splash-icon.png",
@@ -27,7 +27,7 @@
     },
     "android": {
       "package": "pro.appvault.taxisphere.driver",
-      "versionCode": 13,
+      "versionCode": 14,
       "adaptiveIcon": {
         "backgroundColor": "#1a1a2e",
         "foregroundImage": "./assets/android-icon-foreground.png",
