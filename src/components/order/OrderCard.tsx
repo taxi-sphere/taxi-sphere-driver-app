@@ -49,12 +49,22 @@ interface OrderCardProps {
   onPress: (order: AvailableOrder) => void;
   /** Предзаказ показывает время подачи вместо расстояния до неё. */
   scheduled?: boolean;
+  /**
+   * Заказ видно, но взять его сейчас нельзя (1.5.19).
+   *
+   * Так показываются горящие заказы водителю, который уже занят: сервер
+   * отдаёт их в любом состоянии, а причину кладёт в `meta.blockedMessage`.
+   * Карточка гасится и не нажимается — иначе нажатие молча ничего не
+   * делало бы.
+   */
+  disabled?: boolean;
 }
 
 export const OrderCard = memo(function OrderCard({
   order,
   onPress,
   scheduled = false,
+  disabled = false,
 }: OrderCardProps) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -67,10 +77,14 @@ export const OrderCard = memo(function OrderCard({
 
   return (
     <ScalePress
-      onPress={() => onPress(order)}
+      onPress={() => {
+        if (disabled) return;
+        onPress(order);
+      }}
+      disabled={disabled}
       accessibilityLabel={`Заказ номер ${order.orderNumber}, ${formatCurrency(order.estimatedPrice)}`}
     >
-      <Surface level={1} style={styles.card}>
+      <Surface level={1} style={[styles.card, disabled && styles.cardDisabled]}>
         <View style={styles.head}>
           <View style={styles.headLeft}>
             <AppText variant="caption" tone="muted" weight="700">
@@ -114,13 +128,16 @@ export const OrderCard = memo(function OrderCard({
           )}
         </View>
 
-        {(order.tariffName || order.paymentMethod || order.options?.length) && (
+        {(order.tariffName || order.paymentMethod || order.options?.length || order.isHot) && (
           <View style={styles.tags}>
             {order.tariffName ? <Badge tone="neutral">{order.tariffName}</Badge> : null}
             {order.paymentMethod ? (
               <Badge tone={order.paymentMethod === 'cash' ? 'success' : 'info'}>
                 {PAYMENT_LABEL[order.paymentMethod] ?? order.paymentMethod}
               </Badge>
+            ) : null}
+            {order.isHot ? (
+              <Badge tone="warning">Горящий</Badge>
             ) : null}
             {order.stopsCount > 0 ? (
               <Badge tone="warning">
@@ -144,6 +161,7 @@ export const OrderCard = memo(function OrderCard({
 const createStyles = (_t: Theme) =>
   StyleSheet.create({
     card: { gap: spacing.md },
+    cardDisabled: { opacity: 0.55 },
     head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
     headLeft: { gap: spacing.xs, alignItems: 'flex-start' },
     timeBadge: { marginTop: 2 },

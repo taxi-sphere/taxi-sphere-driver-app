@@ -62,6 +62,12 @@ export interface AvailableOrder {
   stops: OrderStop[];
   distanceToPickup: number | null;
   options: OrderOption[];
+  /**
+   * «Горящий» — заказ, который авто-подбор раздать не смог (сервер
+   * v1.99.69). Такие показываются в любом состоянии водителя, даже когда
+   * взять их нельзя.
+   */
+  isHot: boolean;
 }
 
 /** Текущий активный заказ (GET /driver/orders/current) */

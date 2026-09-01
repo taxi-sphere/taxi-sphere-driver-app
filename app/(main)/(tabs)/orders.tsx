@@ -119,6 +119,9 @@ export default function OrdersScreen() {
     gcTime: 0,
   });
 
+  /** Почему заказы сейчас брать нельзя (сервер объясняет в `meta`). */
+  const blockedMessage = meta?.blockedMessage ?? null;
+
   const handleAccept = useCallback((order: AvailableOrder) => {
     setPendingOrder(order);
   }, []);
@@ -212,12 +215,30 @@ export default function OrdersScreen() {
               data={list}
               keyExtractor={(item) => item.id}
               contentContainerStyle={[styles.list, list.length === 0 && styles.listEmpty]}
+              ListHeaderComponent={
+                // Список НЕ пустой, но брать нельзя — так бывает с горящими
+                // заказами: сервер отдаёт их в любом состоянии водителя
+                // (v1.99.69), а принять можно не всегда. Без этой строки
+                // выглядело бы как поломка: карточки есть, нажатие ничего
+                // не делает.
+                !isScheduledTab && blockedMessage && list.length > 0 ? (
+                  <Surface
+                    level={1}
+                    style={[styles.blockedNote, { borderColor: colors.warning }]}
+                  >
+                    <AppText variant="caption" tone="warning">
+                      {blockedMessage}
+                    </AppText>
+                  </Surface>
+                ) : null
+              }
               renderItem={({ item, index }) => (
                 <StaggerItem index={index}>
                   <OrderCard
                     order={item}
                     onPress={handleAccept}
                     scheduled={isScheduledTab}
+                    disabled={!isScheduledTab && Boolean(blockedMessage)}
                   />
                 </StaggerItem>
               )}
@@ -238,7 +259,7 @@ export default function OrdersScreen() {
                   />
                 ) : (
                   <AvailableEmpty
-                    blockedMessage={meta?.blockedMessage ?? null}
+                    blockedMessage={blockedMessage}
                     onGoToOrder={() => router.replace('/(main)/(tabs)/current')}
                   />
                 )
@@ -337,6 +358,10 @@ const createStyles = (_t: Theme) =>
     list: { padding: spacing.lg, paddingTop: spacing.sm, gap: spacing.md },
     // Без этого пустое состояние прижимается к верху вместо центра списка.
     listEmpty: { flexGrow: 1 },
+    blockedNote: {
+      borderWidth: 1,
+      marginBottom: spacing.sm,
+    },
     banner: {
       flexDirection: 'row',
       alignItems: 'center',

@@ -13,6 +13,11 @@ export const driverProfileSchema = z.object({
   id: z.string(),
   phone: z.string(),
   status: z.enum(['offline', 'online', 'busy', 'on_order']),
+  /**
+   * Берёт ли водитель новые заказы (сервер v1.99.69). `default(true)`
+   * обязателен: сборка приложения живёт дольше сервера и наоборот.
+   */
+  acceptingOrders: z.boolean().default(true),
   firstName: z.string().nullable(),
   lastName: z.string().nullable(),
   middleName: z.string().nullable(),

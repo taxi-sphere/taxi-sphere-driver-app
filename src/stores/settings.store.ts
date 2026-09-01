@@ -5,7 +5,7 @@
  *   Персистенция через AsyncStorage.
  * @dependencies: zustand, @react-native-async-storage/async-storage
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-09-01 (v1.5.19 — keepScreenOn)
  */
 
 import { create } from 'zustand';
@@ -31,6 +31,15 @@ interface SettingsState {
    * старта приложения).
    */
   betaChannel: boolean;
+  /**
+   * v1.5.19: не гасить экран, пока приложение открыто.
+   *
+   * По умолчанию ВКЛЮЧЕНО: водитель смотрит на маршрут и на карточку
+   * заказа, а гаснущий каждые полминуты экран заставляет тыкать в телефон
+   * за рулём. Выключатель оставлен для тех, кто работает с зарядкой в
+   * дефиците — экран самый прожорливый потребитель в приложении.
+   */
+  keepScreenOn: boolean;
 
   setServerUrl: (url: string) => void;
   setSoundEnabled: (enabled: boolean) => void;
@@ -40,6 +49,7 @@ interface SettingsState {
   setThemeMode: (mode: ThemeMode) => void;
   setLastPhone: (phone: string) => void;
   setBetaChannel: (enabled: boolean) => void;
+  setKeepScreenOn: (enabled: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -53,6 +63,7 @@ export const useSettingsStore = create<SettingsState>()(
       themeMode: 'system',
       lastPhone: '',
       betaChannel: false,
+      keepScreenOn: true,
 
       setServerUrl: (serverUrl) => set({ serverUrl }),
       setSoundEnabled: (soundEnabled) => set({ soundEnabled }),
@@ -63,6 +74,7 @@ export const useSettingsStore = create<SettingsState>()(
       setThemeMode: (themeMode) => set({ themeMode }),
       setLastPhone: (lastPhone) => set({ lastPhone }),
       setBetaChannel: (betaChannel) => set({ betaChannel }),
+      setKeepScreenOn: (keepScreenOn) => set({ keepScreenOn }),
     }),
     {
       name: 'ts-driver-settings',

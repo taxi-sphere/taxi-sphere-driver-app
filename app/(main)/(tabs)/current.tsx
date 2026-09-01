@@ -62,6 +62,7 @@ import {
   Alert,
   Dimensions,
   Linking,
+  Pressable,
   ScrollView,
   StyleSheet,
   View,
@@ -71,6 +72,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useActiveOrders } from '@/hooks/useCurrentOrder';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useSettingsStore } from '@/stores/settings.store';
+import { useAcceptingOrders } from '@/hooks/useAcceptingOrders';
 import { driverLogger } from '@/services/logger.service';
 import { haptics } from '@/lib/haptics';
 import {
@@ -132,6 +134,14 @@ const SHEET_COLLAPSED = 300;
 const SHEET_EXPANDED = Math.min(Math.max(SCREEN_HEIGHT * 0.66, 420), SCREEN_HEIGHT - 160);
 /** Панель главного действия под шторкой. */
 const ACTION_BAR_HEIGHT = touch.primary + spacing.lg * 2;
+/**
+ * Та же панель, но со второй кнопкой — «Встречный заказ» (v1.5.19).
+ * Высота считается отдельно: под панель отводит место и карта
+ * (`bottomInset`), и шторка (`bottomOffset`), иначе кнопка накроет
+ * содержимое.
+ */
+const ACTION_BAR_HEIGHT_WITH_COUNTER =
+  ACTION_BAR_HEIGHT + touch.min + spacing.sm;
 
 /** Что водитель делает на каждом этапе. */
 const ACTION_BY_STATUS: Partial<
@@ -160,6 +170,9 @@ const ACTION_BY_STATUS: Partial<
 export default function CurrentOrderScreen() {
   const router = useRouter();
   const { data: orders, isLoading, error, refetch } = useActiveOrders();
+  // «Беру / не беру заказы» — про готовность взять встречный, а не про
+  // смену: статус смены на заказе не меняется (1.5.19).
+  const acceptingOrders = useAcceptingOrders();
 
   /**
    * Какой из активных заказов открыт.
@@ -398,7 +411,21 @@ export default function CurrentOrderScreen() {
   // ─── Активный заказ ──────────────────────────────────────────────────
 
   const target = pickTarget(order, shortAddresses);
+  /**
+   * Встречный заказ (v1.5.19). Кнопка видна, пока встречного ещё нет, и
+   * работает только когда клиент уже в машине: правило службы —
+   * второй заказ берут ТОЛЬКО с пассажиром, иначе первый клиент ждёт
+   * машину, которая уехала за вторым. Тот же расчёт делает сервер
+   * (`checkDriverCanTakeOrder`), здесь он лишь объясняет заранее.
+   */
+  const hasCounterOrder = (orders?.length ?? 0) > 1;
+  const canTakeCounter = order?.status === 'in_progress';
+
   const action = ACTION_BY_STATUS[order.status];
+  const showCounterButton = Boolean(action) && !hasCounterOrder;
+  const actionBarHeight = showCounterButton
+    ? ACTION_BAR_HEIGHT_WITH_COUNTER
+    : ACTION_BAR_HEIGHT;
   const canShowMap = mapAvailable && order.pickupLat != null && order.pickupLng != null;
 
   const routePoints: RoutePoint[] = buildRoutePoints(order, shortAddresses, openNavigator);
@@ -407,7 +434,7 @@ export default function CurrentOrderScreen() {
     <View style={styles.root}>
       {canShowMap ? (
         <MapErrorBoundary orderId={order.id}>
-          <OrderMap order={order} fill bottomInset={SHEET_COLLAPSED + ACTION_BAR_HEIGHT} />
+          <OrderMap order={order} fill bottomInset={SHEET_COLLAPSED + actionBarHeight} />
         </MapErrorBoundary>
       ) : (
         <View style={[styles.mapFallback, { backgroundColor: colors.mapPlaceholder }]}>
@@ -437,7 +464,7 @@ export default function CurrentOrderScreen() {
       <BottomSheet
         collapsedHeight={SHEET_COLLAPSED}
         expandedHeight={SHEET_EXPANDED}
-        bottomOffset={ACTION_BAR_HEIGHT}
+        bottomOffset={actionBarHeight}
         header={
           <View style={styles.sheetHeader}>
             {/* Переключатель появляется только при встречном заказе —
@@ -583,7 +610,12 @@ export default function CurrentOrderScreen() {
 
       {/* Панель главного действия. Вне шторки — чтобы не двигалась. */}
       {action && (
-        <View style={[styles.actionBar, { backgroundColor: colors.surface }]}>
+        <View
+          style={[
+            styles.actionBar,
+            { backgroundColor: colors.surface, height: actionBarHeight },
+          ]}
+        >
           <Button
             onPress={handlePrimaryAction}
             size="lg"
@@ -593,6 +625,74 @@ export default function CurrentOrderScreen() {
           >
             {action.label}
           </Button>
+
+          {/* Встречный заказ. Кнопка на месте всегда — водитель должен
+              видеть, что такая возможность есть, и почему она сейчас
+              недоступна. Молча спрятанная кнопка выглядит как её
+              отсутствие. */}
+          {/* «Не беру заказы» — водитель на заказе говорит системе не
+              предлагать ему больше ничего. Отдельно от статуса смены: тот
+              на заказе не меняется (см. useAcceptingOrders). */}
+          <View style={styles.secondaryRow}>
+            <Pressable
+              onPress={() => {
+                haptics.tap();
+                acceptingOrders.toggle();
+              }}
+              disabled={acceptingOrders.isPending}
+              style={({ pressed }: { pressed: boolean }) => [
+                styles.counterButton,
+                styles.secondaryHalf,
+                {
+                  borderColor: acceptingOrders.accepting ? colors.border : colors.warning,
+                },
+                pressed && { backgroundColor: colors.surface },
+                acceptingOrders.isPending && { opacity: 0.5 },
+              ]}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: !acceptingOrders.accepting }}
+              accessibilityLabel={
+                acceptingOrders.accepting
+                  ? 'Беру заказы. Нажмите, чтобы больше не предлагали'
+                  : 'Заказы не предлагаются. Нажмите, чтобы снова получать их'
+              }
+            >
+              <AppText
+                variant="label"
+                tone={acceptingOrders.accepting ? 'primary' : 'warning'}
+              >
+                {acceptingOrders.accepting ? 'Беру заказы' : 'Заказы не беру'}
+              </AppText>
+            </Pressable>
+
+          {showCounterButton && (
+            <Pressable
+              onPress={() => {
+                if (!canTakeCounter) return;
+                haptics.tap();
+                router.push('/(main)/(tabs)/orders');
+              }}
+              disabled={!canTakeCounter}
+              style={({ pressed }: { pressed: boolean }) => [
+                styles.counterButton,
+                { borderColor: colors.border },
+                pressed && canTakeCounter && { backgroundColor: colors.surface },
+                !canTakeCounter && { opacity: 0.5 },
+              ]}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !canTakeCounter }}
+              accessibilityLabel={
+                canTakeCounter
+                  ? 'Встречный заказ'
+                  : 'Встречный заказ доступен после посадки клиента'
+              }
+            >
+              <AppText variant="label" tone={canTakeCounter ? 'primary' : 'muted'}>
+                {canTakeCounter ? 'Встречный' : 'Встречный — после посадки'}
+              </AppText>
+            </Pressable>
+          )}
+          </View>
         </View>
       )}
     </View>
@@ -877,6 +977,23 @@ const createStyles = (t: Theme) =>
       paddingVertical: spacing.lg,
       borderTopWidth: 1,
       borderTopColor: t.colors.border,
+    },
+
+    secondaryRow: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+      marginTop: spacing.sm,
+    },
+    secondaryHalf: { flex: 1, marginTop: 0 },
+
+    counterButton: {
+      flex: 1,
+      marginTop: 0,
+      height: touch.min,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
 
     completed: { alignItems: 'center', gap: spacing.sm, width: '100%', maxWidth: 380 },

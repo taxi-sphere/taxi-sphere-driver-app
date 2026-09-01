@@ -13,6 +13,8 @@ export type DriverStatus = 'offline' | 'online' | 'busy' | 'on_order';
 
 /** Полный профиль водителя (ответ GET /driver/profile) */
 export interface DriverProfile {
+  /** Берёт ли водитель новые заказы (сервер v1.99.69). */
+  acceptingOrders?: boolean;
   id: string;
   phone: string;
   status: DriverStatus;

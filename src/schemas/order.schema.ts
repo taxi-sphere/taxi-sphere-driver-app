@@ -53,6 +53,8 @@ export const availableOrderSchema = z.object({
   stops: z.array(orderStopSchema).default([]),
   distanceToPickup: z.number().nullable(),
   options: z.array(orderOptionSchema).default([]),
+  /** «Горящий» заказ — сервер v1.99.69. `default(false)` для старых серверов. */
+  isHot: z.boolean().default(false),
 });
 
 /**

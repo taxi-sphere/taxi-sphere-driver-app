@@ -33,6 +33,22 @@ export async function setStatus(
   return apiPost<{ status: string }>('driver/status', { status });
 }
 
+/**
+ * Брать ли новые заказы (сервер v1.99.69).
+ *
+ * ОТДЕЛЬНО ОТ СТАТУСА намеренно: статус описывает смену и на заказе не
+ * меняется, а «больше пока не предлагайте» водитель говорит как раз во
+ * время поездки — это про готовность взять встречный. Эндпоинт тот же,
+ * поле другое.
+ */
+export async function setAcceptingOrders(
+  accepting: boolean,
+): Promise<{ status: string; acceptingOrders: boolean }> {
+  return apiPost<{ status: string; acceptingOrders: boolean }>('driver/status', {
+    acceptingOrders: accepting,
+  });
+}
+
 /** Отправить батч GPS-точек */
 export async function sendLocation(
   batch: LocationBatch,
