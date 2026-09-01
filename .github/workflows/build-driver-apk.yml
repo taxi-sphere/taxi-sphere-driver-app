@@ -1,6 +1,8 @@
 name: Build & release driver APK
 
 # Триггер: push тега вида v1.5.4 или v1.5.4-beta.1.
+# Сборка только СОБИРАЕТ APK и кладёт его в GitHub Release. Кому он
+# достанется — решает админка (Приложение водителя → Релизы).
 # Версия в app.json и package.json обязана совпадать с тегом ПОЛНОСТЬЮ,
 # включая суффикс беты — иначе обновление не покажется (см. шаг 2a).
 # Обычные коммиты — не собираем APK, только релизные теги.
@@ -225,57 +227,19 @@ jobs:
           generate_release_notes: true
           files: android/app/build/outputs/apk/release/app-release.apk
 
-      # ── 11. Регистрируем релиз в БД Taxi Sphere (non-blocking) ──────────────
-      # Backend >= v1.99.25 поддерживает X-Service-Token bypass RBAC.
-      # На старых версиях вернётся 403 — это не блокирует workflow: сборка и
-      # GitHub Release уже готовы, админ сможет вставить URL в /admin/driver-app/releases
-      # вручную. Продолжаем всегда через `continue-on-error`.
-      - name: Register release in Taxi Sphere admin (non-blocking)
-        continue-on-error: true
-        env:
-          ADMIN_API_URL: ${{ secrets.ADMIN_API_URL }}
-          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
-        run: |
-          APK_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.parse.outputs.tag }}/app-release.apk"
-          if [ -z "$ADMIN_API_URL" ] || [ -z "$ADMIN_API_TOKEN" ]; then
-            echo "::warning::ADMIN_API_URL / ADMIN_API_TOKEN не заданы — пропускаю регистрацию в БД."
-            echo "Ручная регистрация: /admin/driver-app/releases → «Опубликовать релиз» → URL:"
-            echo "  $APK_URL"
-            exit 0
-          fi
-          PAYLOAD=$(cat <<EOF
-          {
-            "version":       "${{ steps.parse.outputs.version }}",
-            "channel":       "${{ steps.parse.outputs.channel }}",
-            "apkUrl":        "$APK_URL",
-            "apkSizeBytes":  ${{ steps.apk.outputs.size }},
-            "apkSha256":     "${{ steps.apk.outputs.sha256 }}",
-            "changelog":     null,
-            "minRequiredVersion": null,
-            "isForced":      false
-          }
-          EOF
-          )
-          HTTP=$(curl -sS -w '\n%{http_code}' -X POST \
-            "$ADMIN_API_URL/api/admin/driver-app/releases" \
-            -H "Content-Type: application/json" \
-            -H "X-Service-Token: $ADMIN_API_TOKEN" \
-            -d "$PAYLOAD" || echo -e "\n000")
-          BODY=$(echo "$HTTP" | head -n -1)
-          CODE=$(echo "$HTTP" | tail -n 1)
-          echo "HTTP $CODE"
-          echo "$BODY"
-          if [ "$CODE" != "200" ] && [ "$CODE" != "201" ]; then
-            if [ "$CODE" = "401" ]; then
-              echo "::warning::HTTP 401 — запрос отбит ДО маршрута (proxy.ts закрывает /api/admin/* по JWT-куке). Нужен прод >= v1.99.57: там proxy пропускает вызов с верным X-Service-Token. Проверьте также, что ADMIN_API_TOKEN совпадает с INTERNAL_SECRET на проде."
-            elif [ "$CODE" = "403" ]; then
-              echo "::warning::HTTP 403 — маршрут отверг токен: ADMIN_API_TOKEN не совпадает с INTERNAL_SECRET на проде."
-            fi
-            echo "::warning::Регистрация в БД не прошла (HTTP $CODE). Вставьте URL вручную в /admin/driver-app/releases:"
-            echo "  $APK_URL"
-            exit 0
-          fi
-          echo "✅ Релиз ${{ steps.parse.outputs.version }} зарегистрирован в канале «${{ steps.parse.outputs.channel }}»"
+      # ── 11. Публикацию водителям делает АДМИНКА, а не сборка ────────────────
+      # До v1.99.61 здесь стоял шаг, который регистрировал APK в админке и
+      # сразу отдавал его водителям, а канал брался из формата тега. Отсюда
+      # две беды: повысить бету до обычной версии можно было только
+      # пересборкой с новым тегом, и решение «кому это уйдёт» принимало имя
+      # тега, а не человек. Вдобавок шаг был помечен continue-on-error, и его
+      # отказ (403/401) оставался незамеченным — сборка зелёная, а водители
+      # обновления не видят.
+      #
+      # Теперь админка сама читает GitHub Releases этого репозитория
+      # (Приложение водителя → Релизы → «Собранные версии») и публикует
+      # выбранную сборку в выбранный канал нажатием. Секреты ADMIN_API_URL и
+      # ADMIN_API_TOKEN здесь больше не нужны.
 
       - name: Summary
         run: |
@@ -285,8 +249,11 @@ jobs:
             echo "| Поле | Значение |"
             echo "|---|---|"
             echo "| Версия | ${{ steps.parse.outputs.version }} |"
-            echo "| Канал | ${{ steps.parse.outputs.channel }} |"
+            echo "| Канал (подсказка из тега) | ${{ steps.parse.outputs.channel }} |"
             echo "| Размер | $((${{ steps.apk.outputs.size }} / 1024 / 1024)) МБ |"
             echo "| SHA-256 | \`${{ steps.apk.outputs.sha256 }}\` |"
             echo "| APK | [download](https://github.com/${{ github.repository }}/releases/download/${{ steps.parse.outputs.tag }}/app-release.apk) |"
+            echo ""
+            echo "Водителям сборка пока НЕ отдана. Опубликуйте её в нужный канал:"
+            echo "админка → Приложение водителя → Релизы → «Собранные версии»."
           } >> "$GITHUB_STEP_SUMMARY"
