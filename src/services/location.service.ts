@@ -178,13 +178,7 @@ async function startForegroundTrackingImpl(
       distanceInterval: GPS_TRACKING.distanceInterval,
     },
     (location) => {
-      const point: LocationPoint = {
-        lat: location.coords.latitude,
-        lng: location.coords.longitude,
-        speed: location.coords.speed ?? undefined,
-        heading: location.coords.heading ?? undefined,
-        recordedAt: new Date(location.timestamp).toISOString(),
-      };
+      const point = toLocationPoint(location);
       // Живая отправка через Socket.IO — для мгновенного появления
       // на карте в админке. REST-батч параллельно копит для истории.
       socketService.emitLocation(point);
@@ -303,19 +297,37 @@ export interface RawBackgroundLocation {
     longitude: number;
     speed: number | null;
     heading: number | null;
+    accuracy?: number | null;
   };
   timestamp: number;
 }
 
-/** Приводит фоновые точки expo-location к формату, который ждёт сервер. */
-export function toLocationPoints(locations: RawBackgroundLocation[]): LocationPoint[] {
-  return locations.map((loc) => ({
+/**
+ * Одна точка expo-location в формате, который ждёт сервер.
+ *
+ * ОДНА ФУНКЦИЯ НА ОБА КАНАЛА. Раньше foreground собирал точку на месте, а
+ * фон — здесь; поля разъезжались молча (именно так `accuracy` и мог остаться
+ * только в одном из каналов). Теперь формат один.
+ *
+ * Отрицательная скорость и точность — это «не знаю» от Android, а не
+ * значение: отправлять их незачем, поле просто опускается.
+ */
+export function toLocationPoint(loc: RawBackgroundLocation): LocationPoint {
+  const speed = loc.coords.speed;
+  const accuracy = loc.coords.accuracy;
+  return {
     lat: loc.coords.latitude,
     lng: loc.coords.longitude,
-    speed: loc.coords.speed ?? undefined,
+    speed: typeof speed === 'number' && speed >= 0 ? speed : undefined,
     heading: loc.coords.heading ?? undefined,
+    accuracy: typeof accuracy === 'number' && accuracy > 0 ? accuracy : undefined,
     recordedAt: new Date(loc.timestamp).toISOString(),
-  }));
+  };
+}
+
+/** Приводит фоновые точки expo-location к формату, который ждёт сервер. */
+export function toLocationPoints(locations: RawBackgroundLocation[]): LocationPoint[] {
+  return locations.map(toLocationPoint);
 }
 
 /**

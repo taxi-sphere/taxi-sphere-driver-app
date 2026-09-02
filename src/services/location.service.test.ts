@@ -129,6 +129,31 @@ describe('toLocationPoints', () => {
     });
   });
 
+  it('шлёт accuracy — по ней сервер решает, показывать ли фикс', () => {
+    // v1.5.21: без этого поля сервер не может отличить спутниковый фикс от
+    // положения по вышкам, и машина прыгает в соседний квартал.
+    const [p] = toLocationPoints([
+      {
+        coords: { latitude: 1, longitude: 2, speed: 5, heading: 0, accuracy: 12.5 },
+        timestamp: 0,
+      },
+    ]);
+    expect(p!.accuracy).toBe(12.5);
+  });
+
+  it('отрицательные speed/accuracy («не знаю» от Android) опускаются', () => {
+    // Скорость -1 доезжала до серверной zod-схемы с min(0) и роняла ВЕСЬ
+    // батч — до пятидесяти честных точек истории за раз.
+    const [p] = toLocationPoints([
+      {
+        coords: { latitude: 1, longitude: 2, speed: -1, heading: 0, accuracy: -1 },
+        timestamp: 0,
+      },
+    ]);
+    expect(p!.speed).toBeUndefined();
+    expect(p!.accuracy).toBeUndefined();
+  });
+
   it('пустые speed/heading отдаёт как undefined, а не как null', () => {
     const [p] = toLocationPoints([
       { coords: { latitude: 1, longitude: 2, speed: null, heading: null }, timestamp: 0 },
