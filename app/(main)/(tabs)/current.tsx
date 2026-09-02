@@ -673,7 +673,10 @@ export default function CurrentOrderScreen() {
               onPress={() => {
                 if (!canTakeCounter) return;
                 haptics.tap();
-                router.push('/(main)/(tabs)/orders');
+                // replace, а не push: между вкладками в приложении переходят
+                // так везде (см. orders.tsx → «К текущему заказу»), иначе
+                // копится стек и системная «назад» ведёт не туда.
+                router.replace('/(main)/(tabs)/orders');
               }}
               disabled={!canTakeCounter}
               style={({ pressed }: { pressed: boolean }) => [
