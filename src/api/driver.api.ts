@@ -11,6 +11,7 @@ import { apiGet, apiPatch, apiPost } from './client';
 import { driverProfileSchema } from '@/schemas/driver.schema';
 import type { DriverProfile, DriverProfileUpdate, DriverStatus } from '@/types/driver';
 import type { LocationBatch, LocationResponse } from '@/types/location';
+import type { GpsState } from '@/lib/gps-state';
 
 /** Получить профиль водителя */
 export async function getProfile(): Promise<DriverProfile> {
@@ -54,6 +55,18 @@ export async function sendLocation(
   batch: LocationBatch,
 ): Promise<LocationResponse> {
   return apiPost<LocationResponse>('driver/location', batch);
+}
+
+/**
+ * Признак жизни приложения — раз в 30 секунд, независимо от координат.
+ *
+ * ЗАЧЕМ ОТДЕЛЬНО ОТ КООРДИНАТ. Точки перестают идти и когда приложение
+ * убито, и когда водитель в подземном паркинге. Для диспетчера это
+ * противоположные вещи: первого надо убрать с карты, второго — оставить.
+ * Различить их можно только сигналом, который не зависит от GPS.
+ */
+export async function sendHeartbeat(gpsState: GpsState): Promise<void> {
+  await apiPost<{ success: boolean }>('driver/heartbeat', { gpsState });
 }
 
 /** Сохранить push-токен на сервере */

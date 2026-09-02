@@ -15,6 +15,9 @@ import { AppState, type AppStateStatus } from 'react-native';
 import * as Location from 'expo-location';
 import { useDriverStore } from '@/stores/driver.store';
 import { useConnectionStore } from '@/stores/connection.store';
+import { sendHeartbeat } from '@/api/driver.api';
+import { resolveGpsState } from '@/lib/gps-state';
+import { HEARTBEAT_INTERVAL_MS } from '@/lib/constants';
 import {
   startForegroundTracking,
   stopForegroundTracking,
@@ -119,6 +122,28 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
       void stopBackgroundTracking();
     };
   }, [status, gpsPermission]);
+
+  // Признак жизни приложения — раз в 30 секунд, независимо от координат
+  // (1.5.22). Именно этим «приложение убито» отличается от «GPS не ловит»:
+  // по одним только точкам эти случаи неразличимы, а для диспетчера они
+  // противоположны — первого надо убрать с карты, второго оставить.
+  //
+  // Пока водитель не на смене, сигнал не нужен: с карты его и так не видно.
+  useEffect(() => {
+    if (status === 'offline') return;
+
+    const beat = () => {
+      const { gpsPermission: perm, gpsActive } = useConnectionStore.getState();
+      // Ошибку глушим намеренно: пропущенный heartbeat не событие, сервер
+      // ждёт три пропуска подряд. Ронять на нём ничего нельзя — он идёт в
+      // фоне всю смену.
+      void sendHeartbeat(resolveGpsState(perm, gpsActive)).catch(() => undefined);
+    };
+
+    beat();
+    const interval = setInterval(beat, HEARTBEAT_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [status]);
 
   return <>{children}</>;
 }
