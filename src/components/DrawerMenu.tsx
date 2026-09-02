@@ -2,10 +2,17 @@
  * @file: src/components/DrawerMenu.tsx
  * @description:
  *   Боковое меню — открывается по кнопке-гамбургеру.
- *   Содержит: карточку водителя, разделы (Профиль,
- *   Настройки) и сворачивание приложения.
+ *   Содержит: карточку водителя, разделы (Профиль, Настройки) и выход из
+ *   приложения с завершением смены.
  *
- *   v1.5.5: кнопка «Закрыть приложение» переработана:
+ *   1.5.22: сворачивание заменено на «Закончить смену и выйти» — статус
+ *   offline, остановка трекинга, выход. Голое закрытие оставляло водителя в
+ *   базе «на смене», и он не понимал, почему нет заказов. Стало возможно
+ *   только с сервером v1.99.75, где молчание приложения распознаётся; до
+ *   него закрытое приложение было ХУЖЕ свёрнутого — водитель навсегда висел
+ *   на карте как доступный.
+ *
+ *   v1.5.5 (историческое): кнопка «Закрыть приложение» переработана:
  *     • при активном заказе (`on_order`) — Alert-запрет с предложением
  *       перезагрузить приложение (Updates.reloadAsync). Раньше
  *       `BackHandler.exitApp()` убивал foreground-service GPS в самый
@@ -21,7 +28,7 @@
  *   и в них промахивались на ходу.
  *
  * @dependencies: expo-router, auth.store, driver.api, expo-updates,
- *                expo-intent-launcher, driver.store, @/lib/theme,
+ *                location.service, driver.store, @/lib/theme,
  *                @/lib/haptics, @/components/ui
  * @created: 2026-03-18 06:00:00
  * @updated: 2026-09-01 (v1.5.17 — редизайн, тема, зоны нажатия)
@@ -45,8 +52,11 @@ import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
-import * as IntentLauncher from 'expo-intent-launcher';
-import { getProfile } from '@/api/driver.api';
+import { getProfile, setStatus } from '@/api/driver.api';
+import {
+  stopBackgroundTracking,
+  stopForegroundTracking,
+} from '@/services/location.service';
 import { useDriverStore } from '@/stores/driver.store';
 import { driverLogger } from '@/services/logger.service';
 import { haptics } from '@/lib/haptics';
@@ -167,13 +177,32 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
    *       iOS: Apple запрещает программное сворачивание. Показываем
    *         инструкцию — «нажмите Home / свайпните снизу».
    */
-  const handleExitApp = () => {
+  /**
+   * Закончить смену и закрыть приложение.
+   *
+   * ПОЧЕМУ НЕ ПРОСТО «ЗАКРЫТЬ». Голое закрытие оставило бы водителя в базе
+   * «на смене»: он бы думал, что работает, и не понимал, почему нет заказов,
+   * а диспетчер увидел бы его уход только через полторы минуты — когда
+   * сервер досчитает пропущенные heartbeat. Поэтому выход и завершение смены
+   * — одно действие.
+   *
+   * ПОЧЕМУ ЭТО СТАЛО БЕЗОПАСНО ТОЛЬКО СЕЙЧАС. До сервера v1.99.75 закрытое
+   * приложение было хуже свёрнутого: водитель навсегда оставался `online` на
+   * карте, и ему предлагали заказы, которых он не видел. Поэтому в v1.5.5
+   * кнопку и сделали «свернуть». Теперь молчание приложения распознаётся, и
+   * честный выход возможен.
+   *
+   * ОШИБКУ СЕТИ НЕ СЧИТАЕМ ПРЕПЯТСТВИЕМ. Водитель в подвале не должен
+   * оказаться заперт в приложении: смену пишем на сервер по возможности, а
+   * выходим в любом случае — с карты его снимет отсутствие heartbeat.
+   */
+  const handleEndShiftAndExit = () => {
     const driverStatus = useDriverStore.getState().status;
 
     if (driverStatus === 'on_order') {
       haptics.reject();
       Alert.alert(
-        'Нельзя закрыть на заказе',
+        'Нельзя выйти на заказе',
         'У вас активный заказ. Завершите или отмените его, либо перезагрузите приложение (данные заказа сохранятся).',
         [
           { text: 'Отмена', style: 'cancel' },
@@ -198,26 +227,55 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
       return;
     }
 
+    Alert.alert(
+      'Закончить смену?',
+      'Приложение закроется, заказы приходить перестанут. Чтобы снова выйти на линию — просто откройте его.',
+      [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Закончить',
+          style: 'destructive',
+          onPress: () => {
+            void endShiftAndExit();
+          },
+        },
+      ],
+    );
+  };
+
+  const endShiftAndExit = async () => {
     onClose();
 
+    // Сначала статус: пусть диспетчер увидит уход сразу, а не через 90 с.
+    try {
+      await setStatus('offline');
+      useDriverStore.getState().setStatus('offline');
+    } catch (e) {
+      void driverLogger.error('setStatus(offline) failed on exit', {
+        screen: 'drawer',
+        action: 'end_shift_failed',
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+
+    // Трекинг останавливаем ДО выхода: иначе Android оставит фоновую службу
+    // с уведомлением жить своей жизнью, а водитель будет уверен, что закрыл
+    // приложение — и справедливо решит, что оно за ним следит.
+    try {
+      await stopForegroundTracking();
+      await stopBackgroundTracking();
+    } catch {
+      // Не повод не выходить.
+    }
+
     if (Platform.OS === 'android') {
-      setTimeout(() => {
-        IntentLauncher.startActivityAsync('android.intent.action.MAIN', {
-          category: 'android.intent.category.HOME',
-          flags: 268435456, // FLAG_ACTIVITY_NEW_TASK — требуется для intent из root activity
-        }).catch((e) => {
-          void driverLogger.error('Home intent failed, fallback to exitApp', {
-            screen: 'drawer',
-            action: 'move_to_back_failed',
-            message: e instanceof Error ? e.message : String(e),
-          });
-          BackHandler.exitApp();
-        });
-      }, 300);
+      // Пауза — чтобы успело уйти обновление статуса и закрыться шторка.
+      setTimeout(() => BackHandler.exitApp(), 300);
     } else {
+      // Apple запрещает программный выход и отклоняет такие приложения.
       Alert.alert(
-        'Как свернуть приложение',
-        'На iOS программное сворачивание запрещено. Нажмите кнопку Home (или свайпните снизу вверх).',
+        'Смена закончена',
+        'Заказы больше не придут. Чтобы закрыть приложение, смахните его в переключателе приложений.',
         [{ text: 'Понятно' }],
       );
     }
@@ -288,9 +346,9 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
           <Divider style={styles.separator} />
 
           <MenuItem
-            icon="contract-outline"
-            label="Свернуть приложение"
-            onPress={handleExitApp}
+            icon="power-outline"
+            label="Закончить смену и выйти"
+            onPress={handleEndShiftAndExit}
             tint={colors.textMuted}
             showChevron={false}
           />
