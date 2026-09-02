@@ -135,12 +135,15 @@ const SHEET_EXPANDED = Math.min(Math.max(SCREEN_HEIGHT * 0.66, 420), SCREEN_HEIG
 /** Панель главного действия под шторкой. */
 const ACTION_BAR_HEIGHT = touch.primary + spacing.lg * 2;
 /**
- * Та же панель, но со второй кнопкой — «Встречный заказ» (v1.5.19).
- * Высота считается отдельно: под панель отводит место и карта
- * (`bottomInset`), и шторка (`bottomOffset`), иначе кнопка накроет
- * содержимое.
+ * Панель с ВТОРОЙ строкой кнопок («Беру заказы» и «Встречный»).
+ *
+ * Высота считается отдельно, потому что под панель отводят место и карта
+ * (`bottomInset`), и шторка (`bottomOffset`). Проверено на эмуляторе
+ * (1.5.19): пока высоту брали только при видимой кнопке «Встречный», у
+ * водителя со встречным заказом вторая строка уезжала за край экрана —
+ * переключателя «Беру заказы» просто не было видно.
  */
-const ACTION_BAR_HEIGHT_WITH_COUNTER =
+const ACTION_BAR_HEIGHT_TWO_ROWS =
   ACTION_BAR_HEIGHT + touch.min + spacing.sm;
 
 /** Что водитель делает на каждом этапе. */
@@ -423,9 +426,9 @@ export default function CurrentOrderScreen() {
 
   const action = ACTION_BY_STATUS[order.status];
   const showCounterButton = Boolean(action) && !hasCounterOrder;
-  const actionBarHeight = showCounterButton
-    ? ACTION_BAR_HEIGHT_WITH_COUNTER
-    : ACTION_BAR_HEIGHT;
+  // Вторая строка есть ВСЕГДА, пока есть главное действие: переключатель
+  // «Беру заказы» показывается независимо от кнопки «Встречный».
+  const actionBarHeight = action ? ACTION_BAR_HEIGHT_TWO_ROWS : ACTION_BAR_HEIGHT;
   const canShowMap = mapAvailable && order.pickupLat != null && order.pickupLng != null;
 
   const routePoints: RoutePoint[] = buildRoutePoints(order, shortAddresses, openNavigator);
