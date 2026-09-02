@@ -39,6 +39,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as SystemUI from 'expo-system-ui';
 import { useKeepAwake } from 'expo-keep-awake';
 import { AppProviders } from '@/providers/AppProviders';
+import { ScheduledConfirmationWatcher } from '@/components/ScheduledConfirmationWatcher';
 import { useAuthStore } from '@/stores/auth.store';
 import { RootErrorBoundary } from '@/components/RootErrorBoundary';
 import { AppUpdateNotifier } from '@/components/AppUpdateNotifier';
@@ -129,6 +130,10 @@ export default function RootLayout() {
         <AppProviders>
           <StatusBar style={theme.isDark ? 'light' : 'dark'} />
           <AppUpdateNotifier />
+          {/* Подтверждение предзаказа: сервер спрашивает, водитель отвечает.
+              Живёт в корне, потому что спросить надо там, где водитель
+              сейчас, — в списке, в поездке или в «Деньгах». */}
+          <ScheduledConfirmationWatcher />
           <Stack
             screenOptions={{
               headerShown: false,

@@ -5,7 +5,7 @@
  *   Контракты совпадают с /api/v1/driver/orders/* на backend.
  * @dependencies: нет
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-09-02 (v1.5.23 — детали заказа, телефон диспетчерской)
  */
 
 /** Статус заказа */
@@ -96,9 +96,26 @@ export interface CurrentOrder {
   assignedAt: string | null;
   startedAt: string | null;
   serviceName: string | null;
+  /** Телефон диспетчерской службы заказа. `null` — не заполнен в админке. */
+  dispatcherPhone: string | null;
   tariffName: string | null;
   stops: OrderStop[];
   options: OrderOption[];
+}
+
+/**
+ * Детали одного заказа (`GET /driver/orders/{id}`, сервер v1.99.76).
+ *
+ * Один тип на два случая: чужой свободный заказ и свой предзаказ. Их
+ * различает `isMine`; у своего кнопки «Принять» нет вовсе, у чужого она
+ * есть и гаснет с объяснением в `blockedMessage`.
+ */
+export interface OrderDetails {
+  order: AvailableOrder;
+  isMine: boolean;
+  canAccept: boolean;
+  blockedReason: string | null;
+  blockedMessage: string | null;
 }
 
 /** Мета-информация из API доступных заказов */

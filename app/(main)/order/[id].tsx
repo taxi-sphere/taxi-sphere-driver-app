@@ -1,8 +1,14 @@
 /**
  * @file: app/(main)/order/[id].tsx
  * @description:
- *   Модальный экран деталей заказа (из списка доступных).
- *   Показывает подробности заказа и позволяет принять его.
+ *   Экран деталей заказа: свободного из списка или своего предзаказа.
+ *
+ *   ДО 1.5.23 ЭКРАН БЫЛ НЕДОСТИЖИМ. На него не вело ни одной ссылки, а
+ *   заказ он искал перебором всего списка `/orders/available` — то есть свой
+ *   предзаказ не нашёл бы никогда: своих заказов в `available` нет по
+ *   определению. Теперь данные берутся по идентификатору
+ *   (`GET /orders/{id}`, сервер v1.99.76), и экран открывается из обоих
+ *   списков.
  *
  *   v1.5.17: переведён на дизайн-систему. Раньше это был третий по счёту
  *   способ нарисовать одно и то же — свои точки маршрута, своя карточка,
@@ -12,18 +18,27 @@
  *
  * @dependencies: useOrderActions, orders.api, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-01 (v1.5.17 — дизайн-система)
+ * @updated: 2026-09-02 (v1.5.23 — свой эндпоинт, режим «мой заказ», объяснение отказа)
  */
 
 import { useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
-import { getAvailableOrders, getOrderEtaEstimate } from '@/api/orders.api';
+import { getOrderDetails, getOrderEtaEstimate } from '@/api/orders.api';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { IncomingOrderModal } from '@/components/IncomingOrderModal';
 import { formatCurrency, formatDistance } from '@/lib/utils';
-import { spacing, touch, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
+import {
+  icon as iconTokens,
+  radius,
+  spacing,
+  touch,
+  useTheme,
+  useThemedStyles,
+  type Theme,
+} from '@/lib/theme';
 import {
   AppText,
   Badge,
@@ -51,14 +66,19 @@ export default function OrderDetailScreen() {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
 
-  // Получаем заказ из кэша доступных заказов
-  const { data: orders, isLoading } = useQuery({
-    queryKey: ['orders', 'available'],
-    queryFn: () => getAvailableOrders(),
+  const {
+    data: details,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['order', id, 'details'],
+    queryFn: () => getOrderDetails(id),
+    enabled: Boolean(id),
     staleTime: 10_000,
+    retry: 1,
   });
 
-  const order = orders?.items.find((o) => o.id === id);
+  const order = details?.order;
 
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -99,14 +119,16 @@ export default function OrderDetailScreen() {
   }
 
   if (!order) {
-    // Заказ мог уйти другому водителю, пока экран открывался.
+    // Сервер отдаёт 404 и на исчезнувший заказ, и на чужой — намеренно, см.
+    // шапку роута. Для водителя это один и тот же случай: заказа больше нет.
     return (
       <Screen>
         <EmptyState
           icon="close-circle-outline"
-          title="Заказ уже забрали"
-          description="Его принял другой водитель или диспетчер отменил заказ"
-          action={{ label: 'К списку', onPress: () => router.back() }}
+          tone={error ? 'danger' : undefined}
+          title="Заказ недоступен"
+          description="Его принял другой водитель, или диспетчер отменил заказ"
+          action={{ label: 'Назад', onPress: () => router.back() }}
         />
       </Screen>
     );
@@ -164,15 +186,46 @@ export default function OrderDetailScreen() {
         ) : null}
       </ScrollView>
 
+      {/* Три случая, и молчать нельзя ни в одном.
+          • Свой предзаказ — принимать нечего, он уже за водителем.
+          • Чужой свободный, взять можно — обычная кнопка.
+          • Чужой свободный, взять нельзя — кнопка погашена, а НАД ней
+            стоит объяснение сервера: почему нельзя и когда будет можно.
+            Раньше такие карточки просто не нажимались, и это выглядело
+            как поломка списка. */}
       <View style={[styles.bottomBar, { backgroundColor: colors.surface }]}>
-        <Button
-          onPress={() => setConfirmOpen(true)}
-          size="lg"
-          fullWidth
-          loading={accept.isPending}
-        >
-          ПРИНЯТЬ ЗАКАЗ
-        </Button>
+        {details?.isMine ? (
+          <View style={styles.mineNote}>
+            <Ionicons name="checkmark-circle" size={iconTokens.md} color={colors.success} />
+            <AppText variant="label" tone="success">
+              {order.scheduledAt ? 'Ваш предзаказ' : 'Ваш заказ'}
+            </AppText>
+          </View>
+        ) : (
+          <>
+            {details?.blockedMessage ? (
+              <View style={[styles.blockedNote, { backgroundColor: colors.warningSoft }]}>
+                <Ionicons
+                  name="information-circle"
+                  size={iconTokens.sm}
+                  color={colors.warning}
+                />
+                <AppText variant="caption" tone="warning" style={styles.blockedText}>
+                  {details.blockedMessage}
+                </AppText>
+              </View>
+            ) : null}
+            <Button
+              onPress={() => setConfirmOpen(true)}
+              size="lg"
+              fullWidth
+              disabled={!details?.canAccept}
+              loading={accept.isPending}
+            >
+              ПРИНЯТЬ ЗАКАЗ
+            </Button>
+          </>
+        )}
       </View>
 
       <IncomingOrderModal
@@ -182,6 +235,7 @@ export default function OrderDetailScreen() {
         timerSec={ACCEPT_TIMER_SEC}
         initialEtaMin={etaQuery.data?.etaMin ?? DEFAULT_ETA_MIN}
         etaLoading={etaQuery.isFetching}
+        etaViaCurrentTrip={etaQuery.data?.viaCurrentTrip}
         accepting={accept.isPending}
         onAccept={handleConfirmAccept}
         onDismiss={handleDismissModal}
@@ -225,6 +279,22 @@ const createStyles = (t: Theme) =>
     },
     comment: { gap: spacing.sm },
     commentText: { marginTop: spacing.xs },
+    mineNote: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.sm,
+      minHeight: touch.primary,
+    },
+    blockedNote: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: spacing.sm,
+      padding: spacing.md,
+      borderRadius: radius.md,
+      marginBottom: spacing.md,
+    },
+    blockedText: { flex: 1 },
     bottomBar: {
       position: 'absolute',
       left: 0,

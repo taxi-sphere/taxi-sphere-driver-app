@@ -75,6 +75,12 @@ export interface IncomingOrderModalProps {
   mode: IncomingOrderMode;
   /** Рекомендуемое начальное время подачи в минутах (от сервера). */
   initialEtaMin?: number;
+  /**
+   * Рекомендация посчитана через высадку текущего клиента — встречный заказ.
+   * Показываем это прямо под селектором: иначе водитель видит непривычно
+   * большое число и правит его вниз, обещая второму клиенту невыполнимое.
+   */
+  etaViaCurrentTrip?: boolean;
   /** Загружается ли ETA с сервера — показывает спиннер вместо значения. */
   etaLoading?: boolean;
   /** Длительность таймера в секундах (обычно 30 для confirm, 15 для offer). */
@@ -156,12 +162,15 @@ function EtaSelector({
   onChange,
   presets,
   disabled,
+  viaCurrentTrip,
 }: {
   value: number;
   onChange: (v: number) => void;
   /** Набор быстрых значений — считается от рекомендации сервера. */
   presets: number[];
   disabled?: boolean;
+  /** Рекомендация посчитана через высадку текущего клиента. */
+  viaCurrentTrip?: boolean;
 }) {
   const { colors } = useTheme();
   const etaStyles = useThemedStyles(createEtaStyles);
@@ -251,6 +260,15 @@ function EtaSelector({
   return (
     <View style={etaStyles.wrap}>
       <Text style={etaStyles.label}>Время подачи</Text>
+
+      {/* Встречный заказ: объясняем, откуда взялось время. Иначе водитель
+          видит непривычно большое число, считает его ошибкой и правит вниз —
+          а второму клиенту уходит обещание, которое не выполнить. */}
+      {viaCurrentTrip ? (
+        <Text style={etaStyles.hint}>
+          С учётом времени до высадки текущего клиента
+        </Text>
+      ) : null}
 
       <View style={etaStyles.stepper}>
         <TouchableOpacity
@@ -343,6 +361,7 @@ export function IncomingOrderModal({
   mode,
   initialEtaMin,
   etaLoading,
+  etaViaCurrentTrip,
   timerSec,
   accepting,
   onAccept,
@@ -577,6 +596,7 @@ export function IncomingOrderModal({
             onChange={setEtaMin}
             presets={presets}
             disabled={accepting || etaLoading}
+            viaCurrentTrip={etaViaCurrentTrip}
           />
 
           {/* Кнопка «Принять» с таймером */}
@@ -821,6 +841,13 @@ const createEtaStyles = (t: Theme) =>
     label: {
       color: t.colors.textMuted,
       ...text.overline,
+      marginBottom: spacing.sm,
+      textAlign: 'center',
+    },
+    hint: {
+      color: t.colors.warning,
+      ...text.caption,
+      marginTop: -spacing.xs,
       marginBottom: spacing.sm,
       textAlign: 'center',
     },

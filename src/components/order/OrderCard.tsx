@@ -90,7 +90,12 @@ export const OrderCard = memo(function OrderCard({
             <AppText variant="caption" tone="muted" weight="700">
               № {order.orderNumber}
             </AppText>
-            {scheduled && order.scheduledAt ? (
+            {/* 1.5.23: условием было `scheduled && ...`, где `scheduled`
+                значит «мы на вкладке предзаказов», а не «у заказа есть
+                время». Из-за этого свободный предзаказ в «Свободных»
+                показывался без времени и выглядел как немедленный —
+                водитель брал заказ на 18:00, думая, что ехать сейчас. */}
+            {order.scheduledAt ? (
               <Badge tone="info" style={styles.timeBadge}>
                 {formatScheduledAt(order.scheduledAt)}
               </Badge>

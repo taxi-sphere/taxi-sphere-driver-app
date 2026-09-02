@@ -117,6 +117,41 @@ class SocketService {
     };
   }
 
+  /**
+   * Сервер просит подтвердить предзаказ (DISPATCH-V5).
+   *
+   * До 1.5.23 приложение на это событие НЕ ПОДПИСЫВАЛОСЬ и эндпоинт
+   * `confirm-scheduled` не вызывало ни разу. Сервер честно ждал
+   * подтверждения, не получал его и по таймауту передавал заказ другому —
+   * функция не работала от начала до конца. Держалось только на том, что
+   * подтверждение выключено в стратегии по умолчанию.
+   */
+  onConfirmationRequired(
+    callback: EventCallback<{
+      orderId: string;
+      orderNumber: number;
+      pickupAddress: string;
+      scheduledAt: string;
+      graceMin: number;
+      graceExpiresAt: string;
+    }>,
+  ): () => void {
+    this.socket?.on('order:confirmation_required', callback);
+    return () => {
+      this.socket?.off('order:confirmation_required', callback);
+    };
+  }
+
+  /** Заказ передали другому водителю — водитель не подтвердил вовремя. */
+  onOrderReassigned(
+    callback: EventCallback<{ orderId: string; orderNumber: number; reason: string }>,
+  ): () => void {
+    this.socket?.on('order:reassigned', callback);
+    return () => {
+      this.socket?.off('order:reassigned', callback);
+    };
+  }
+
   /** Подписка на событие «баланс изменился» */
   onBalanceChanged<T>(callback: EventCallback<T>): () => void {
     this.socket?.on('balance:changed', callback);

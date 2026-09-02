@@ -16,6 +16,16 @@ export { Screen } from './Screen';
 export { AppText, type AppTextProps, type TextTone } from './Text';
 export { Surface, Card } from './Surface';
 export { Button, IconButton, type ButtonVariant, type ButtonSize } from './Button';
+export {
+  ConfirmDialogProvider,
+  useDialog,
+  useConfirm,
+  useNotify,
+  type DialogAction,
+  type DialogRequest,
+  type DialogResult,
+  type ConfirmOptions,
+} from './ConfirmDialog';
 export { Badge, type BadgeTone } from './Badge';
 export { BottomSheet } from './BottomSheet';
 export { Divider } from './Divider';

@@ -95,6 +95,21 @@ export const scheduledOrdersResponseSchema = z.object({
   items: z.array(availableOrderSchema),
 });
 
+/**
+ * Ответ `/orders/{id}` — детали одного заказа (сервер v1.99.76).
+ *
+ * `isMine` отличает свой предзаказ от чужого свободного: у первого нет
+ * кнопки «Принять», а у второго она есть и может быть погашена с
+ * объяснением из `blockedMessage`.
+ */
+export const orderDetailsResponseSchema = z.object({
+  order: availableOrderSchema,
+  isMine: z.boolean(),
+  canAccept: z.boolean(),
+  blockedReason: z.string().nullish().default(null),
+  blockedMessage: z.string().nullish().default(null),
+});
+
 export const currentOrderSchema = z.object({
   id: z.string(),
   orderNumber: z.number(),
@@ -128,6 +143,10 @@ export const currentOrderSchema = z.object({
   assignedAt: z.string().nullable(),
   startedAt: z.string().nullable(),
   serviceName: z.string().nullable(),
+  // Телефон диспетчерской службы, которая ведёт заказ (сервер v1.99.76).
+  // `nullish` + default: на сервере старше приложения поля просто нет, и
+  // весь ответ не должен из-за этого отбраковываться разбором.
+  dispatcherPhone: z.string().nullish().default(null),
   tariffName: z.string().nullable(),
   // default([]) — защита от отсутствия поля в ответе сервера
   stops: z.array(orderStopSchema).default([]),

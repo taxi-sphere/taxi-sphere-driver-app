@@ -24,7 +24,7 @@
  *   - @/stores/connection.store
  *   - @/lib/theme, @/components/ui
  * @created: 2026-03-18 07:00:00
- * @updated: 2026-09-01 (v1.5.17 — редизайн, тема, статус on_order)
+ * @updated: 2026-09-02 (v1.5.23 — на заказе пилюля переключает встречные)
  */
 
 import { useEffect } from 'react';
@@ -40,6 +40,7 @@ import Animated, {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
+import { useAcceptingOrders } from '@/hooks/useAcceptingOrders';
 import { useDriverProfile } from '@/hooks/useDriverProfile';
 import { useLocationTracking } from '@/hooks/useLocationTracking';
 import { useConnectionStore } from '@/stores/connection.store';
@@ -62,16 +63,19 @@ interface TopBarProps {
   onMenuPress: () => void;
 }
 
+interface StatusView {
+  label: string;
+  color: keyof ThemeColors;
+  background: keyof ThemeColors;
+  togglable: boolean;
+}
+
 /** Как выглядит каждый статус: подпись, цвет и можно ли его переключить. */
-const STATUS_VIEW: Record<
-  DriverStatus,
-  { label: string; color: keyof ThemeColors; background: keyof ThemeColors; togglable: boolean }
-> = {
+const STATUS_VIEW: Record<DriverStatus, StatusView> = {
   online: { label: 'СВОБОДЕН', color: 'success', background: 'successSoft', togglable: true },
   busy: { label: 'ЗАНЯТ', color: 'warning', background: 'warningSoft', togglable: true },
-  // Посреди поездки переключать статус нельзя: это сняло бы водителя с
-  // заказа, который он уже везёт.
-  on_order: { label: 'НА ЗАКАЗЕ', color: 'primary', background: 'primarySoft', togglable: false },
+  // Подпись на заказе собирается отдельно — см. ON_ORDER_VIEW.
+  on_order: { label: 'НА ЗАКАЗЕ', color: 'primary', background: 'primarySoft', togglable: true },
   offline: {
     label: 'НЕ НА ЛИНИИ',
     color: 'textMuted',
@@ -80,9 +84,39 @@ const STATUS_VIEW: Record<
   },
 };
 
+/**
+ * Пилюля во время поездки.
+ *
+ * ПОЧЕМУ ЗДЕСЬ ДРУГОЕ ПОЛЕ. Слово на кнопке одно и то же — «Свободен» или
+ * «Занят», — но на заказе оно означает не смену, а готовность взять
+ * встречный, и пишется в `acceptingOrders`, а не в `status`. Писать сюда
+ * `status` было бы нельзя: он на заказе значит «везёт клиента», по нему
+ * диспетчер видит водителя в пульте, и запись «занят» стёрла бы это.
+ *
+ * До 1.5.23 готовность переключалась отдельной кнопкой на экране заказа, а
+ * пилюля в это время была мёртвой надписью. Два органа управления на одно
+ * решение — и оба про «беру я заказы или нет».
+ */
+const ON_ORDER_VIEW: Record<'accepting' | 'refusing', StatusView> = {
+  accepting: {
+    label: 'НА ЗАКАЗЕ · СВОБОДЕН',
+    color: 'primary',
+    background: 'primarySoft',
+    togglable: true,
+  },
+  refusing: {
+    label: 'НА ЗАКАЗЕ · ЗАНЯТ',
+    color: 'warning',
+    background: 'warningSoft',
+    togglable: true,
+  },
+};
+
 export function TopBar({ onMenuPress }: TopBarProps) {
   const router = useRouter();
   const { status, toggleBusy, isUpdating } = useDriverStatus();
+  // На заказе та же пилюля переключает готовность взять встречный (1.5.23).
+  const accepting = useAcceptingOrders();
   const { isTracking } = useLocationTracking();
   const socketStatus = useConnectionStore((s) => s.socketStatus);
   const isConnected = socketStatus === 'connected';
@@ -94,13 +128,20 @@ export function TopBar({ onMenuPress }: TopBarProps) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
 
-  const view = STATUS_VIEW[status] ?? STATUS_VIEW.offline;
-  const canToggle = isConnected && view.togglable && !isUpdating;
+  const onOrder = status === 'on_order';
+  const view = onOrder
+    ? ON_ORDER_VIEW[accepting.accepting ? 'accepting' : 'refusing']
+    : (STATUS_VIEW[status] ?? STATUS_VIEW.offline);
+
+  // На заказе жмём готовность взять встречный, вне заказа — статус смены.
+  const toggle = onOrder ? accepting.toggle : toggleBusy;
+  const isBusy = onOrder ? accepting.isPending : isUpdating;
+  const canToggle = isConnected && view.togglable && !isBusy;
 
   const scale = useSharedValue(1);
   const pillStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
-  const statusLabel = !isConnected ? 'НЕТ СВЯЗИ' : isUpdating ? 'МЕНЯЮ…' : view.label;
+  const statusLabel = !isConnected ? 'НЕТ СВЯЗИ' : isBusy ? 'МЕНЯЮ…' : view.label;
   const statusColor = isConnected ? colors[view.color] : colors.danger;
 
   return (
@@ -117,7 +158,7 @@ export function TopBar({ onMenuPress }: TopBarProps) {
 
         <Animated.View style={[styles.pillWrap, pillStyle]}>
           <Pressable
-            onPress={canToggle ? toggleBusy : undefined}
+            onPress={canToggle ? toggle : undefined}
             disabled={!canToggle}
             onPressIn={() => {
               if (canToggle) scale.value = withSpring(0.97, spring.snappy);
@@ -129,8 +170,14 @@ export function TopBar({ onMenuPress }: TopBarProps) {
             accessibilityLabel={
               isConnected ? `Статус: ${view.label.toLowerCase()}` : 'Нет связи с сервером'
             }
-            accessibilityHint={canToggle ? 'Нажмите, чтобы переключить статус' : undefined}
-            accessibilityState={{ disabled: !canToggle, busy: isUpdating }}
+            accessibilityHint={
+              canToggle
+                ? onOrder
+                  ? 'Нажмите, чтобы включить или выключить встречные заказы'
+                  : 'Нажмите, чтобы переключить статус'
+                : undefined
+            }
+            accessibilityState={{ disabled: !canToggle, busy: isBusy }}
             style={[
               styles.pill,
               { backgroundColor: isConnected ? colors[view.background] : colors.dangerSoft },

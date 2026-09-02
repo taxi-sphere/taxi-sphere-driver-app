@@ -22,10 +22,11 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAvailableOrders } from '@/hooks/useAvailableOrders';
+import { activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
 import { useScheduledOrders } from '@/hooks/useScheduledOrders';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useConnectionStore } from '@/stores/connection.store';
@@ -42,9 +43,10 @@ import {
   Segmented,
   StaggerItem,
   Surface,
+  useNotify,
 } from '@/components/ui';
 import { icon as iconTokens, spacing, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
-import type { AvailableOrder } from '@/types/order';
+import type { AvailableOrder, CurrentOrder } from '@/types/order';
 
 const ACCEPT_TIMER_SEC = 30;
 const DEFAULT_ETA_MIN = 5;
@@ -58,6 +60,8 @@ export default function OrdersScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const queryClient = useQueryClient();
+  const notify = useNotify();
 
   const [tab, setTab] = useState<Tab>('available');
 
@@ -122,27 +126,49 @@ export default function OrdersScreen() {
   /** Почему заказы сейчас брать нельзя (сервер объясняет в `meta`). */
   const blockedMessage = meta?.blockedMessage ?? null;
 
-  const handleAccept = useCallback((order: AvailableOrder) => {
-    setPendingOrder(order);
-  }, []);
 
   const handleConfirmAccept = useCallback(
     (pickupEtaMin: number) => {
       if (!pendingOrder) return;
+
+      /**
+       * Встречный ли это заказ — решаем ДО принятия, по тому, есть ли уже
+       * активный. После успеха список уже обновится, и отличить встречный от
+       * обычного будет нечем.
+       */
+      const active = queryClient.getQueryData<CurrentOrder[]>(activeOrdersQueryKey);
+      const isCounter = (active?.length ?? 0) > 0;
+      const orderNumber = pendingOrder.orderNumber;
+
       accept.mutate(
         { orderId: pendingOrder.id, pickupEtaMin },
         {
-          onSuccess: () => {
+          onSuccess: async () => {
             // v1.5.5: сразу открываем экран «Текущий заказ», чтобы водитель
             // не искал куда идти дальше. Раньше он оставался на «Заказы»
             // и должен был вручную кликнуть по вкладке.
             router.replace('/(main)/(tabs)/current');
+
+            /**
+             * 1.5.23: про встречный говорим вслух. Раньше переход выглядел
+             * так же, как при обычном заказе: экран открывался на ПЕРВОМ
+             * заказе, а второй появлялся неприметным переключателем в шапке
+             * шторки. Водитель не понимал, взялся заказ или нет, и жал
+             * «Встречный» второй раз.
+             */
+            if (isCounter) {
+              await notify(
+                `Встречный заказ № ${orderNumber} принят`,
+                `Подача через ${pickupEtaMin} мин — после того, как высадите текущего клиента. ` +
+                  'Переключаться между заказами можно вверху шторки.',
+              );
+            }
           },
           onSettled: () => setPendingOrder(null),
         },
       );
     },
-    [accept, pendingOrder, router],
+    [accept, pendingOrder, router, queryClient, notify],
   );
 
   const handleDismissModal = useCallback(() => {
@@ -155,6 +181,32 @@ export default function OrdersScreen() {
   const listLoading = isScheduledTab ? scheduled.isLoading : isLoading;
   const listError = isScheduledTab ? scheduled.error : error;
   const reload = isScheduledTab ? scheduled.refetch : refetch;
+
+  /**
+   * Нажатие на карточку.
+   *
+   * Свободный заказ, который можно взять, — сразу окно подтверждения: это
+   * самый частый путь, и лишний экран в нём был бы платой ни за что.
+   *
+   * Во всех остальных случаях открываем детали:
+   *   • свой предзаказ — посмотреть адреса и время (принимать нечего, он
+   *     уже за водителем). До 1.5.23 нажатие на него открывало окно
+   *     «Принять заказ?», а подтверждение уходило в `/accept` и получало
+   *     409: свой заказ принять нельзя;
+   *   • заказ, который сейчас брать нельзя, — там водитель прочитает,
+   *     почему нельзя и когда будет можно. Раньше такие карточки просто
+   *     не нажимались, и это выглядело как поломка списка.
+   */
+  const handleCardPress = useCallback(
+    (order: AvailableOrder) => {
+      if (isScheduledTab || blockedMessage) {
+        router.push(`/(main)/order/${order.id}` as never);
+        return;
+      }
+      setPendingOrder(order);
+    },
+    [isScheduledTab, blockedMessage, router],
+  );
 
   return (
     <Screen>
@@ -236,9 +288,8 @@ export default function OrdersScreen() {
                 <StaggerItem index={index}>
                   <OrderCard
                     order={item}
-                    onPress={handleAccept}
+                    onPress={handleCardPress}
                     scheduled={isScheduledTab}
-                    disabled={!isScheduledTab && Boolean(blockedMessage)}
                   />
                 </StaggerItem>
               )}
@@ -276,6 +327,7 @@ export default function OrdersScreen() {
         timerSec={ACCEPT_TIMER_SEC}
         initialEtaMin={etaQuery.data?.etaMin ?? DEFAULT_ETA_MIN}
         etaLoading={etaQuery.isFetching}
+        etaViaCurrentTrip={etaQuery.data?.viaCurrentTrip}
         accepting={accept.isPending}
         onAccept={handleConfirmAccept}
         onDismiss={handleDismissModal}

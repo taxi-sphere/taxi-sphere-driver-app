@@ -10,6 +10,7 @@
 import { apiGet, apiPost } from './client';
 import {
   activeOrdersResponseSchema,
+  orderDetailsResponseSchema,
   availableOrdersResponseSchema,
   currentOrderResponseSchema,
   scheduledOrdersResponseSchema,
@@ -19,6 +20,7 @@ import type {
   AvailableOrder,
   AvailableOrdersMeta,
   CurrentOrder,
+  OrderDetails,
   AcceptOrderResponse,
   CompleteOrderResponse,
 } from '@/types/order';
@@ -127,6 +129,63 @@ export async function getActiveOrders(): Promise<CurrentOrder[]> {
   return current ? [current] : [];
 }
 
+/**
+ * Детали одного заказа: свободного или своего предзаказа.
+ *
+ * ПОЧЕМУ ОТДЕЛЬНЫЙ ЗАПРОС, А НЕ ПОИСК ПО СПИСКУ. Экран деталей раньше
+ * запрашивал весь `/orders/available` и искал нужный по `id`. Свой
+ * предзаказ так не находился никогда — своих заказов в `available` нет по
+ * определению, — и экран был недостижим. Сервер отдаёт заказ по
+ * идентификатору с v1.99.76.
+ */
+export async function getOrderDetails(orderId: string): Promise<OrderDetails> {
+  const res = await apiGet(`driver/orders/${orderId}`);
+  const parsed = orderDetailsResponseSchema.safeParse(res);
+
+  if (!parsed.success) {
+    driverLogger.error('Schema validation failed: order details', {
+      stack: String(parsed.error?.message ?? parsed.error),
+      screen: 'orders.api',
+      action: 'parse_order_details',
+      extra: { issues: parsed.error?.issues, orderId },
+    });
+    throw new Error('Не удалось прочитать ответ сервера');
+  }
+
+  return parsed.data;
+}
+
+/**
+ * Подтвердить готовность выполнить предзаказ (DISPATCH-V5).
+ *
+ * Сервер за N минут до подачи спрашивает водителя, поедет ли он, и ждёт
+ * ответа `graceMin` минут. Не дождался — возвращает заказ в общий пул и
+ * ищет другого. До 1.5.23 приложение этот эндпоинт не вызывало ни разу.
+ *
+ * Различаем два отказа: `already_confirmed` — водитель нажал дважды, это не
+ * ошибка; `already_expired` — заказ уже ушёл, и об этом надо сказать прямо.
+ */
+export async function confirmScheduledOrder(
+  orderId: string,
+): Promise<{ ok: true } | { ok: false; reason: 'expired' | 'unknown'; message: string }> {
+  try {
+    await apiPost(`driver/orders/${orderId}/confirm-scheduled`, {});
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Ошибка соединения';
+    const expired = /expired|истек|передан/i.test(message);
+
+    driverLogger.error('Не удалось подтвердить предзаказ', {
+      stack: message,
+      screen: 'orders.api',
+      action: 'confirm_scheduled',
+      extra: { orderId },
+    });
+
+    return { ok: false, reason: expired ? 'expired' : 'unknown', message };
+  }
+}
+
 /** Принять заказ с указанием времени подачи в минутах */
 export async function acceptOrder(
   orderId: string,
@@ -138,12 +197,21 @@ export async function acceptOrder(
   );
 }
 
-/** Рекомендуемое время подачи (минуты) от GPS водителя до точки подачи заказа. */
+/** Рекомендуемое время подачи (минуты) до точки подачи заказа. */
 export interface EtaEstimateResponse {
   etaMin: number;
   distanceKm: number | null;
   provider: '2gis' | 'yandex' | 'haversine';
   usedFallback: boolean;
+  /**
+   * Время посчитано ЧЕРЕЗ высадку текущего клиента (сервер v1.99.76).
+   *
+   * Так бывает у встречного заказа: до новой подачи водитель поедет только
+   * после того, как высадит первого. Без объяснения рекомендация выглядит
+   * завышенной — «тут же десять минут ехать» — и водитель занижает её
+   * вручную, обещая второму клиенту то, чего не выполнит.
+   */
+  viaCurrentTrip?: boolean;
 }
 
 /** Получить рекомендуемое время подачи для заказа (через выбранного провайдера). */

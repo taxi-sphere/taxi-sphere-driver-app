@@ -127,22 +127,32 @@ export function BottomSheet({
         sheetStyle,
       ]}
     >
-      <GestureDetector gesture={pan}>
-        <View style={styles.headerZone}>
-          <Pressable
-            onPress={() => snapTo(offset.value > range / 2)}
-            hitSlop={spacing.md}
-            accessibilityRole="button"
-            accessibilityLabel="Развернуть или свернуть подробности заказа"
-            style={styles.grabberHit}
-          >
-            <View style={[styles.grabber, { backgroundColor: theme.colors.borderStrong }]} />
-          </Pressable>
-          {header}
-        </View>
-      </GestureDetector>
+      {/* Обрезка живёт на отдельной вьюхе, а не на самой шторке: `elevation`
+          и `overflow: 'hidden'` на одной вьюхе Android не прощает — при смене
+          темы он вырезает всё содержимое (подробности — в Surface.tsx). */}
+      <View
+        style={[
+          styles.clip,
+          { borderTopLeftRadius: radius.xxl, borderTopRightRadius: radius.xxl },
+        ]}
+      >
+        <GestureDetector gesture={pan}>
+          <View style={styles.headerZone}>
+            <Pressable
+              onPress={() => snapTo(offset.value > range / 2)}
+              hitSlop={spacing.md}
+              accessibilityRole="button"
+              accessibilityLabel="Развернуть или свернуть подробности заказа"
+              style={styles.grabberHit}
+            >
+              <View style={[styles.grabber, { backgroundColor: theme.colors.borderStrong }]} />
+            </Pressable>
+            {header}
+          </View>
+        </GestureDetector>
 
-      <View style={styles.body}>{children}</View>
+        <View style={styles.body}>{children}</View>
+      </View>
     </Animated.View>
   );
 }
@@ -152,8 +162,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    overflow: 'hidden',
   },
+  /** Скругление верхних углов режет содержимое здесь, а не на самой шторке. */
+  clip: { flex: 1, overflow: 'hidden' },
   headerZone: {
     paddingTop: spacing.xs,
   },

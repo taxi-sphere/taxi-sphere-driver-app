@@ -44,7 +44,7 @@
  * @dependencies: useActiveOrders, useOrderActions, @/components/ui,
  *                @/components/order/*, @/components/map/OrderMap
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-01 (v1.5.17 — полная пересборка экрана)
+ * @updated: 2026-09-02 (v1.5.23 — кнопки у адреса, выбор кому звонить, низкая шторка)
  */
 
 import {
@@ -72,7 +72,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useActiveOrders } from '@/hooks/useCurrentOrder';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useSettingsStore } from '@/stores/settings.store';
-import { useAcceptingOrders } from '@/hooks/useAcceptingOrders';
 import { driverLogger } from '@/services/logger.service';
 import { haptics } from '@/lib/haptics';
 import {
@@ -81,7 +80,6 @@ import {
   formatDuration,
   formatTime,
   formatTimer,
-  maskPhone,
   splitAddressEntrance,
   stripSharedCityPrefix,
 } from '@/lib/utils';
@@ -108,6 +106,7 @@ import {
   ScalePress,
   Screen,
   Surface,
+  useDialog,
   type RoutePoint,
 } from '@/components/ui';
 import { OrderProgress } from '@/components/order/OrderProgress';
@@ -122,26 +121,29 @@ const mapAvailable = isEmbeddedMapAvailable();
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 /**
- * Свёрнутая шторка: полоса этапов, текущая цель, клиент и цена.
+ * Свёрнутая шторка: полоса этапов и текущая цель с кнопками.
  *
- * Высота с запасом. В худшем случае (адрес в две строки плюс чип подъезда)
- * содержимое шапки набирает ровно 252px, и строка с «Позвонить» и
- * «Навигатором» оказалась бы срезана — то есть недоступна, пока шторку не
- * потянут. Лишнее место внизу не пропадает: в него видно начало маршрута.
+ * Было 300 — почти половина экрана под сведения, которые водитель уже
+ * прочитал. Стало 170: адрес в две строки, обе кнопки (звонок и навигатор)
+ * и полоса этапов помещаются, а карта получает вдвое больше места. Всё
+ * остальное — цена, маршрут, комментарий — потягиванием вверх, и только
+ * когда понадобилось.
  */
-const SHEET_COLLAPSED = 300;
+const SHEET_COLLAPSED = 170;
 /** Развёрнутая — но не во весь экран: карта должна оставаться видимой. */
 const SHEET_EXPANDED = Math.min(Math.max(SCREEN_HEIGHT * 0.66, 420), SCREEN_HEIGHT - 160);
 /** Панель главного действия под шторкой. */
 const ACTION_BAR_HEIGHT = touch.primary + spacing.lg * 2;
 /**
- * Панель с ВТОРОЙ строкой кнопок («Беру заказы» и «Встречный»).
+ * Панель со ВТОРОЙ строкой — кнопкой «Встречный».
  *
  * Высота считается отдельно, потому что под панель отводят место и карта
- * (`bottomInset`), и шторка (`bottomOffset`). Проверено на эмуляторе
- * (1.5.19): пока высоту брали только при видимой кнопке «Встречный», у
- * водителя со встречным заказом вторая строка уезжала за край экрана —
- * переключателя «Беру заказы» просто не было видно.
+ * (`bottomInset`), и шторка (`bottomOffset`).
+ *
+ * 1.5.23: строка резервируется ровно тогда, когда кнопка показывается. До
+ * этого рядом жила «Беру заказы», строка существовала всегда, и высоту
+ * приходилось брать по наличию главного действия — иначе у водителя со
+ * встречным заказом переключатель уезжал за край экрана (1.5.19).
  */
 const ACTION_BAR_HEIGHT_TWO_ROWS =
   ACTION_BAR_HEIGHT + touch.min + spacing.sm;
@@ -173,9 +175,6 @@ const ACTION_BY_STATUS: Partial<
 export default function CurrentOrderScreen() {
   const router = useRouter();
   const { data: orders, isLoading, error, refetch } = useActiveOrders();
-  // «Беру / не беру заказы» — про готовность взять встречный, а не про
-  // смену: статус смены на заказе не меняется (1.5.19).
-  const acceptingOrders = useAcceptingOrders();
 
   /**
    * Какой из активных заказов открыт.
@@ -193,6 +192,7 @@ export default function CurrentOrderScreen() {
   const preferredNavigator = useSettingsStore((s) => s.preferredNavigator);
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const askDialog = useDialog();
 
   // Таймер ожидания клиента (driver_arrived)
   const [waitingSeconds, setWaitingSeconds] = useState(0);
@@ -244,7 +244,16 @@ export default function CurrentOrderScreen() {
     };
   }, [order?.status]);
 
-  // Авторедирект на вкладку «Заказы» после завершения
+  /**
+   * Последний известный список активных заказов — для момента после
+   * завершения. Читать `orders` прямо в таймере нельзя: он замкнулся бы на
+   * значение, каким оно было при запуске отсчёта, а именно в эти секунды
+   * список и обновляется — завершённый заказ из него уходит.
+   */
+  const ordersRef = useRef<CurrentOrder[] | undefined>(undefined);
+  ordersRef.current = orders;
+
+  // Куда уходим после завершения заказа
   useEffect(() => {
     if (!completed) {
       setRedirectCountdown(null);
@@ -257,7 +266,20 @@ export default function CurrentOrderScreen() {
         if (prev === null || prev <= 1) {
           clearInterval(timer);
           setCompleted(null);
-          router.replace('/(main)/(tabs)/orders');
+
+          /**
+           * 1.5.23: остался встречный — открываем ЕГО, а не список
+           * свободных. Раньше отсюда всегда уходили в «Заказы», и водитель
+           * со вторым заказом в работе оказывался на экране свободных
+           * заказов — а его клиент в это время ждал в машине. Найти
+           * встречный можно было только вручную, через вкладку «Заказ».
+           */
+          const remaining = ordersRef.current ?? [];
+          if (remaining.length > 0 && remaining[0]) {
+            setSelectedId(remaining[0].id);
+          } else {
+            router.replace('/(main)/(tabs)/orders');
+          }
           return null;
         }
         return prev - 1;
@@ -355,10 +377,40 @@ export default function CurrentOrderScreen() {
     ]);
   }, [order, arrive, start, complete, runOrderAction]);
 
-  const callClient = (phone: string) => {
+  const call = (phone: string) => {
     haptics.tap();
     Linking.openURL(`tel:${phone}`);
   };
+
+  /**
+   * Трубка у адреса: кому звонить.
+   *
+   * Окно показывается ВСЕГДА, даже когда телефон диспетчерской не заполнен —
+   * тогда второй пункт просто погашен. Если бы трубка иногда открывала выбор,
+   * а иногда звонила сразу, водитель на ходу нажал бы её по памяти и позвонил
+   * не тому. Одно действие — один исход.
+   */
+  const askWhomToCall = useCallback(async () => {
+    if (!order) return;
+    const dispatcherPhone = order.dispatcherPhone;
+
+    const choice = await askDialog({
+      title: 'Кому позвонить?',
+      actions: [
+        { label: 'Клиенту', icon: 'person-outline' },
+        {
+          label: 'Диспетчеру',
+          icon: 'headset-outline',
+          variant: 'secondary',
+          disabled: !dispatcherPhone,
+          hint: 'Телефон диспетчерской не заполнен в настройках службы',
+        },
+      ],
+    });
+
+    if (choice === 0) call(order.clientPhone);
+    else if (choice === 1 && dispatcherPhone) call(dispatcherPhone);
+  }, [askDialog, order]);
 
   // ─── Состояния без заказа ────────────────────────────────────────────
 
@@ -426,9 +478,11 @@ export default function CurrentOrderScreen() {
 
   const action = ACTION_BY_STATUS[order.status];
   const showCounterButton = Boolean(action) && !hasCounterOrder;
-  // Вторая строка есть ВСЕГДА, пока есть главное действие: переключатель
-  // «Беру заказы» показывается независимо от кнопки «Встречный».
-  const actionBarHeight = action ? ACTION_BAR_HEIGHT_TWO_ROWS : ACTION_BAR_HEIGHT;
+  // 1.5.23: во второй строке осталась одна кнопка «Встречный», поэтому
+  // место под неё резервируется ровно тогда, когда она показывается. Пока
+  // рядом жила «Беру заказы», строка существовала всегда, и высоту брали по
+  // наличию главной кнопки.
+  const actionBarHeight = showCounterButton ? ACTION_BAR_HEIGHT_TWO_ROWS : ACTION_BAR_HEIGHT;
   const canShowMap = mapAvailable && order.pickupLat != null && order.pickupLng != null;
 
   const routePoints: RoutePoint[] = buildRoutePoints(order, shortAddresses, openNavigator);
@@ -508,46 +562,46 @@ export default function CurrentOrderScreen() {
 
             <OrderProgress status={order.status} />
 
+            {/* Действия стоят у того адреса, к которому относятся, а не
+                отдельной строкой ниже. Строка с именем и номером клиента
+                убрана: номер всё равно под маской — прочитать и набрать его
+                нельзя, — а места она занимала больше, чем обе кнопки. */}
             <View style={styles.targetBlock}>
-              <AppText variant="overline" tone="muted">
-                {target.label}
-              </AppText>
-              <AppText variant="title" numberOfLines={2}>
-                {target.address}
-              </AppText>
+              <View style={styles.targetRow}>
+                <View style={styles.targetText}>
+                  <AppText variant="overline" tone="muted">
+                    {target.label}
+                  </AppText>
+                  <AppText variant="title" numberOfLines={2}>
+                    {target.address}
+                  </AppText>
+                </View>
+
+                <View style={styles.targetActions}>
+                  <IconButton
+                    icon="call"
+                    onPress={() => void askWhomToCall()}
+                    accessibilityLabel="Позвонить"
+                    background={colors.successSoft}
+                    color={colors.success}
+                  />
+                  {target.lat != null && target.lng != null && (
+                    <IconButton
+                      icon="navigate"
+                      onPress={() => openNavigator(target.lat!, target.lng!)}
+                      accessibilityLabel="Открыть в навигаторе"
+                      background={colors.primarySoft}
+                      color={colors.primary}
+                    />
+                  )}
+                </View>
+              </View>
+
               {target.entrance ? (
                 <Badge tone="brand" size="md" style={styles.entrance}>
                   Подъезд {target.entrance}
                 </Badge>
               ) : null}
-            </View>
-
-            <View style={styles.quickRow}>
-              <IconButton
-                icon="call"
-                onPress={() => callClient(order.clientPhone)}
-                accessibilityLabel="Позвонить клиенту"
-                background={colors.successSoft}
-                color={colors.success}
-              />
-              <View style={styles.clientInfo}>
-                <AppText variant="bodyStrong" numberOfLines={1}>
-                  {order.clientName || 'Клиент'}
-                </AppText>
-                <AppText variant="label" tone="muted">
-                  {maskPhone(order.clientPhone)}
-                </AppText>
-              </View>
-              {target.lat != null && target.lng != null && (
-                <Button
-                  onPress={() => openNavigator(target.lat!, target.lng!)}
-                  icon="navigate"
-                  variant="secondary"
-                  size="md"
-                >
-                  Навигатор
-                </Button>
-              )}
             </View>
           </View>
         }
@@ -632,42 +686,14 @@ export default function CurrentOrderScreen() {
           {/* Встречный заказ. Кнопка на месте всегда — водитель должен
               видеть, что такая возможность есть, и почему она сейчас
               недоступна. Молча спрятанная кнопка выглядит как её
-              отсутствие. */}
-          {/* «Не беру заказы» — водитель на заказе говорит системе не
-              предлагать ему больше ничего. Отдельно от статуса смены: тот
-              на заказе не меняется (см. useAcceptingOrders). */}
-          <View style={styles.secondaryRow}>
-            <Pressable
-              onPress={() => {
-                haptics.tap();
-                acceptingOrders.toggle();
-              }}
-              disabled={acceptingOrders.isPending}
-              style={({ pressed }: { pressed: boolean }) => [
-                styles.counterButton,
-                styles.secondaryHalf,
-                {
-                  borderColor: acceptingOrders.accepting ? colors.border : colors.warning,
-                },
-                pressed && { backgroundColor: colors.surface },
-                acceptingOrders.isPending && { opacity: 0.5 },
-              ]}
-              accessibilityRole="switch"
-              accessibilityState={{ checked: !acceptingOrders.accepting }}
-              accessibilityLabel={
-                acceptingOrders.accepting
-                  ? 'Беру заказы. Нажмите, чтобы больше не предлагали'
-                  : 'Заказы не предлагаются. Нажмите, чтобы снова получать их'
-              }
-            >
-              <AppText
-                variant="label"
-                tone={acceptingOrders.accepting ? 'primary' : 'warning'}
-              >
-                {acceptingOrders.accepting ? 'Беру заказы' : 'Заказы не беру'}
-              </AppText>
-            </Pressable>
+              отсутствие.
 
+              1.5.23: кнопка «Беру заказы» отсюда убрана. Она делала ровно
+              то же, что пилюля статуса в шапке, — говорила системе, брать
+              ли встречные, — и водитель имел два органа управления на одно
+              решение. Осталась пилюля: она на виду всегда и на всех
+              экранах, а не только здесь. */}
+          <View style={styles.secondaryRow}>
           {showCounterButton && (
             <Pressable
               onPress={() => {
@@ -955,8 +981,9 @@ const createStyles = (t: Theme) =>
     },
     targetBlock: { gap: spacing.xs },
     entrance: { marginTop: spacing.xs },
-    quickRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-    clientInfo: { flex: 1 },
+    targetRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+    targetText: { flex: 1, gap: spacing.xs },
+    targetActions: { flexDirection: 'row', gap: spacing.sm },
 
     sheetBody: { padding: spacing.lg, paddingTop: 0, gap: spacing.lg },
     section: { gap: spacing.sm },
@@ -990,7 +1017,6 @@ const createStyles = (t: Theme) =>
       gap: spacing.sm,
       marginTop: spacing.sm,
     },
-    secondaryHalf: { flex: 1, marginTop: 0 },
 
     counterButton: {
       flex: 1,
