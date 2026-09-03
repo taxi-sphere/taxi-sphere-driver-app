@@ -110,6 +110,7 @@ import {
 } from '@/components/ui';
 import { OrderProgress } from '@/components/order/OrderProgress';
 import { OrderMap } from '@/components/map/OrderMap';
+import { SHEET_COLLAPSED, sheetExpandedHeight } from '@/lib/sheet-metrics';
 import type { CurrentOrder, OrderStatus } from '@/types/order';
 
 /**
@@ -118,47 +119,6 @@ import type { CurrentOrder, OrderStatus } from '@/types/order';
  */
 const mapAvailable = isEmbeddedMapAvailable();
 
-/**
- * Свёрнутая шторка: полоса этапов и текущая цель с кнопками.
- *
- * Было 300 — почти половина экрана под сведения, которые водитель уже
- * прочитал. Стало 215: помещаются полоса этапов, адрес В ДВЕ СТРОКИ, чип
- * подъезда и обе кнопки (звонок и навигатор), а карта получает вдвое больше
- * места. Всё остальное — цена, маршрут, комментарий — потягиванием вверх.
- *
- * Замерено на эмуляторе 360dp (1.5.23): адрес в ОДНУ строку вместе с чипом
- * подъезда занимает 159, при 170 он влезал впритык. Длинные адреса
- * («Красноярск, ул. Академика Киренского, д. 32, корп. 1») переносятся на
- * вторую строку — это ещё ~34, и чип подъезда уезжал под обрез. Подъезд
- * терять нельзя: водитель без него звонит клиенту и спрашивает.
- */
-const SHEET_COLLAPSED = 215;
-/**
- * Сколько карты обязано остаться видно над развёрнутой шторкой.
- *
- * Меньше — и водитель теряет из виду то, ради чего карта на весь экран.
- */
-const MAP_MIN_VISIBLE = 96;
-
-/**
- * Высота развёрнутой шторки.
- *
- * СЧИТАЕТСЯ ОТ ИЗМЕРЕННОГО КОНТЕЙНЕРА, А НЕ ОТ ОКНА. Раньше здесь стояло
- * `Dimensions.get('window').height - 160`, но шторка живёт не в окне: над
- * ней шапка со статусом и полоса с балансом, под ней — вкладки. Окно выше
- * контейнера на всю эту обвязку, и запас в 160 её не покрывал: верх шторки
- * заезжал под шапку, а вместе с ним исчезали полоска-хват и точки полосы
- * этапов — оставались одни подписи «Подача / Ожидание / Поездка / Готово».
- * Воспроизведено на эмуляторе 360dp (1.5.23).
- *
- * `containerHeight = 0` — разметка ещё не посчиталась; отдаём свёрнутую
- * высоту, чтобы на первом кадре шторка не прыгала.
- */
-function sheetExpandedHeight(containerHeight: number, actionBarHeight: number): number {
-  if (containerHeight <= 0) return SHEET_COLLAPSED;
-  const available = containerHeight - actionBarHeight - MAP_MIN_VISIBLE;
-  return Math.max(SHEET_COLLAPSED, Math.min(containerHeight * 0.66, available));
-}
 /** Панель главного действия под шторкой. */
 const ACTION_BAR_HEIGHT = touch.primary + spacing.lg * 2;
 /** Что водитель делает на каждом этапе. */
@@ -500,7 +460,9 @@ export default function CurrentOrderScreen() {
    * посадки». Взять встречный водитель идёт туда же, куда за любым другим
    * заказом: в «Заказы».
    */
-  const actionBarHeight = ACTION_BAR_HEIGHT;
+  // Нет кнопки — нет и полосы под неё: иначе шторка висела бы над
+  // пустой полосой в 88.
+  const actionBarHeight = action ? ACTION_BAR_HEIGHT : 0;
   const canShowMap = mapAvailable && order.pickupLat != null && order.pickupLng != null;
 
   const routePoints: RoutePoint[] = buildRoutePoints(order, shortAddresses, openNavigator);

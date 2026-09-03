@@ -31,7 +31,7 @@
  * @created: 2026-09-01 (v1.5.17)
  */
 
-import { useCallback, type ReactNode } from 'react';
+import { useCallback, useEffect, type ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -74,11 +74,30 @@ export function BottomSheet({
   // Смещение вниз: 0 — развёрнута, `range` — свёрнута.
   const offset = useSharedValue(range);
   const startOffset = useSharedValue(range);
+  /** Положение шторки по смыслу, а не в пикселях: переживает смену `range`. */
+  const isExpanded = useSharedValue(false);
+
+  /**
+   * Пересадить шторку на новый ход.
+   *
+   * `useSharedValue(range)` берёт начальное значение ОДИН раз, а `range`
+   * здесь известен не сразу: `expandedHeight` считается от высоты
+   * контейнера, а её меряют после первого кадра. До замера `range` равен
+   * нулю, и `offset` остаётся нулём и после — то есть «развёрнута». Шторка
+   * открывалась сама, закрывала карту и дальше уже никуда не тянулась:
+   * ход-то у неё был, но начинала она с его конца (1.5.24).
+   *
+   * Без анимации: это не движение шторки, а пересчёт её же положения.
+   */
+  useEffect(() => {
+    offset.value = isExpanded.value ? 0 : range;
+  }, [range, offset, isExpanded]);
 
   /** Довести шторку до ближайшего положения. Годится и из JS, и из worklet. */
   const snapTo = useCallback(
     (expanded: boolean) => {
       'worklet';
+      isExpanded.value = expanded;
       offset.value = withSpring(expanded ? 0 : range, spring.gentle);
       if (onToggle) {
         // Из worklet колбэк вызывается только через runOnJS; из JS-потока
@@ -86,7 +105,7 @@ export function BottomSheet({
         runOnJS(onToggle)(expanded);
       }
     },
-    [offset, range, onToggle],
+    [offset, range, isExpanded, onToggle],
   );
 
   const pan = Gesture.Pan()
