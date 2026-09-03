@@ -106,6 +106,15 @@ export const OrderCard = memo(function OrderCard({
           </AppText>
         </View>
 
+        {/* Город — серой строкой над адресами и ТОЛЬКО чужой: внутри своего
+            он был бы шумом в каждой карточке, а межгород водитель обязан
+            увидеть до того, как возьмёт заказ. */}
+        {order.cityLabel ? (
+          <AppText variant="caption" tone="muted" style={styles.city}>
+            {order.cityLabel}
+          </AppText>
+        ) : null}
+
         <RoutePoints points={points} compact style={styles.route} />
 
         <Divider style={styles.divider} />
@@ -170,6 +179,7 @@ const createStyles = (_t: Theme) =>
     head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
     headLeft: { gap: spacing.xs, alignItems: 'flex-start' },
     timeBadge: { marginTop: 2 },
+    city: { marginTop: spacing.sm },
     route: { marginTop: spacing.xs },
     divider: { marginTop: spacing.xs },
     footer: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, flexWrap: 'wrap' },

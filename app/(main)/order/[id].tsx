@@ -153,6 +153,13 @@ export default function OrderDetailScreen() {
         </View>
 
         <Surface level={1}>
+          {/* Город — только чужой (сервер v1.99.77). Здесь водитель решает,
+              брать ли заказ, и межгород обязан быть виден до кнопки. */}
+          {order.cityLabel ? (
+            <AppText variant="caption" tone="muted" style={styles.city}>
+              {order.cityLabel}
+            </AppText>
+          ) : null}
           <RoutePoints points={points} emphasized />
         </Surface>
 
@@ -268,6 +275,7 @@ const createStyles = (t: Theme) =>
       paddingBottom: touch.primary + spacing.xxxl * 2,
     },
     header: { alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.sm },
+    city: { marginBottom: spacing.sm },
     details: { paddingHorizontal: spacing.lg },
     detailRow: {
       flexDirection: 'row',

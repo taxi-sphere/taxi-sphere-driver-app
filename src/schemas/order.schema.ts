@@ -53,6 +53,12 @@ export const availableOrderSchema = z.object({
   stops: z.array(orderStopSchema).default([]),
   distanceToPickup: z.number().nullable(),
   options: z.array(orderOptionSchema).default([]),
+  /**
+   * Населённый пункт заказа — приходит ТОЛЬКО когда он не свой (сервер
+   * v1.99.77). `.optional()` — на старом сервере поля нет, и подписи просто
+   * не будет; это верно, там и расчёта нет.
+   */
+  cityLabel: z.string().nullable().optional(),
   /** «Горящий» заказ — сервер v1.99.69. `default(false)` для старых серверов. */
   isHot: z.boolean().default(false),
   /**
@@ -152,6 +158,12 @@ export const currentOrderSchema = z.object({
   assignedAt: z.string().nullable(),
   startedAt: z.string().nullable(),
   serviceName: z.string().nullable(),
+  /**
+   * Населённый пункт заказа — приходит ТОЛЬКО когда он не свой (сервер
+   * v1.99.77). `.optional()` — на старом сервере поля нет, и подписи просто
+   * не будет; это верно, там и расчёта нет.
+   */
+  cityLabel: z.string().nullable().optional(),
   // Телефон диспетчерской службы, которая ведёт заказ (сервер v1.99.76).
   // `nullish` + default: на сервере старше приложения поля просто нет, и
   // весь ответ не должен из-за этого отбраковываться разбором.

@@ -45,6 +45,8 @@ export interface AvailableOrder {
   id: string;
   orderNumber: number;
   pickupAddress: string;
+  /** Населённый пункт — только если он не свой (сервер v1.99.77). */
+  cityLabel?: string | null;
   pickupLat: number | null;
   pickupLng: number | null;
   dropoffAddress: string | null;
@@ -84,6 +86,8 @@ export interface CurrentOrder {
   clientPhone: string;
   clientName: string | null;
   pickupAddress: string;
+  /** Населённый пункт — только если он не свой (сервер v1.99.77). */
+  cityLabel?: string | null;
   pickupLat: number | null;
   pickupLng: number | null;
   pickupEntrance: string | null;

@@ -552,8 +552,12 @@ export default function CurrentOrderScreen() {
             <View style={styles.targetBlock}>
               <View style={styles.targetRow}>
                 <View style={styles.targetText}>
+                  {/* Город приписан к подписи этапа, а не отдельной строкой:
+                      в шторке каждая строка на счету, а нужен он только в
+                      межгороде — сервер и присылает его лишь тогда. */}
                   <AppText variant="overline" tone="muted">
                     {target.label}
+                    {order.cityLabel ? ` · ${order.cityLabel}` : ''}
                   </AppText>
                   <AppText variant="title" numberOfLines={2}>
                     {target.address}
