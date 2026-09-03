@@ -13,6 +13,7 @@ import ky, { HTTPError, type KyInstance, type Options } from 'ky';
 import { getApiBase, API_TIMEOUT_MS, API_RETRY_COUNT } from '@/lib/constants';
 import { useAuthStore } from '@/stores/auth.store';
 import { driverLogger } from '@/services/logger.service';
+import { apiErrorForStatus } from '@/lib/utils';
 import * as tokenService from '@/services/token.service';
 
 /* -------------------------------------------------------------------------- */
@@ -114,9 +115,15 @@ export const api: KyInstance = ky.create({
           // тело не JSON — оставляем стандартное сообщение
         }
 
-        if (serverMessage) {
-          error.message = serverMessage;
-        }
+        /**
+         * Сообщение сервера — если оно есть; иначе причина по коду ответа.
+         *
+         * Стандартный текст ky («Request failed with status code 404: POST
+         * https://…/release») до экрана доходить не должен: водитель видел
+         * адрес и код вместо причины. Технические подробности при этом не
+         * теряются — они уходят в админский лог строкой ниже.
+         */
+        error.message = serverMessage ?? apiErrorForStatus(response.status);
 
         // Логируем все 4xx/5xx (кроме 401 — там идёт refresh-flow) в админский лог
         if (response.status !== 401) {

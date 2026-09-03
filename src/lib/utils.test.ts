@@ -21,6 +21,7 @@ import {
   formatPhoneInput,
   isPhoneComplete,
   splitAddressEntrance,
+  apiErrorForStatus,
   humanApiError,
   shortenStreetType,
   stripSharedCityPrefix,
@@ -331,5 +332,32 @@ describe('humanApiError — что видит водитель', () => {
 
   it('сетевую ошибку тоже прячем', () => {
     expect(humanApiError('Network Error', 'Нет связи')).toBe('Нет связи');
+  });
+});
+
+describe('apiErrorForStatus — причина вместо адреса', () => {
+  it('404 объясняет, что сервер старее приложения', () => {
+    // Раньше здесь водитель видел «Request failed with status code 404:
+    // POST https://…/release» — адрес и код вместо причины.
+    expect(apiErrorForStatus(404)).toContain('обновление сервера');
+  });
+
+  it.each([
+    [401, 'заново'],
+    [403, 'заново'],
+    [504, 'связь'],
+    [429, 'Подождите'],
+    [500, 'ещё раз'],
+    [503, 'ещё раз'],
+  ])('%i → человеческая причина', (status, fragment) => {
+    expect(apiErrorForStatus(status)).toContain(fragment);
+  });
+
+  it('ни в одном тексте нет ни кода, ни ссылки', () => {
+    for (const status of [400, 401, 403, 404, 408, 429, 500, 503, 504]) {
+      const text = apiErrorForStatus(status);
+      expect(text).not.toMatch(/https?:\/\//);
+      expect(text).not.toMatch(/\d{3}/);
+    }
   });
 });
