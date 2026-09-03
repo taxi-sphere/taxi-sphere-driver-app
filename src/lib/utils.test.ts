@@ -21,6 +21,7 @@ import {
   formatPhoneInput,
   isPhoneComplete,
   splitAddressEntrance,
+  humanApiError,
   shortenStreetType,
   stripSharedCityPrefix,
   usableChangelog,
@@ -309,5 +310,26 @@ describe('usableChangelog — что показать в окне обновле
   it('пусто — нечего показывать', () => {
     expect(usableChangelog('')).toBeNull();
     expect(usableChangelog(null)).toBeNull();
+  });
+});
+
+describe('humanApiError — что видит водитель', () => {
+  it('ссылку и код ответа заменяем человеческим текстом', () => {
+    expect(
+      humanApiError(
+        'Request failed with status code 404: POST https://x/api/v1/driver/orders/1/release',
+        'Сервер не ответил',
+      ),
+    ).toBe('Сервер не ответил');
+  });
+
+  it('сообщение сервера показываем как есть', () => {
+    expect(
+      humanApiError('Клиент уже в машине — отказаться нельзя.', 'Сервер не ответил'),
+    ).toBe('Клиент уже в машине — отказаться нельзя.');
+  });
+
+  it('сетевую ошибку тоже прячем', () => {
+    expect(humanApiError('Network Error', 'Нет связи')).toBe('Нет связи');
   });
 });

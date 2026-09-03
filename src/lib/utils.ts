@@ -364,3 +364,23 @@ export function usableChangelog(text: string | null | undefined): string | null 
   if (/^\**full\s+changelog\**\s*:/i.test(value)) return null;
   return value;
 }
+
+/**
+ * Текст ошибки, который не стыдно показать водителю.
+ *
+ * Клиент API вытаскивает человеческое сообщение из тела ответа
+ * (`{ error: '...' }`), но не всякая ошибка приходит с телом: маршрута нет
+ * на сервере — Next.js отвечает HTML, и до экрана долетает «Request failed
+ * with status code 404: POST https://…/release». Водителю такое показывать
+ * нельзя: он видит ссылку и решает, что приложение сломалось.
+ *
+ * Технические подробности при этом не теряются — они уходят в лог админки
+ * там же, где вызывается эта функция.
+ */
+export function humanApiError(message: string, fallback: string): string {
+  const technical =
+    /https?:\/\//.test(message) ||
+    /status code \d{3}/i.test(message) ||
+    /^\s*(Request failed|Network Error|Failed to fetch)/i.test(message);
+  return technical ? fallback : message;
+}

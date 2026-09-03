@@ -4,7 +4,7 @@
  *   API-вызовы заказов: доступные, текущий, принять, прибыл, начать, завершить.
  * @dependencies: api/client, schemas/order.schema
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-09-03 (1.5.28 — releaseOrder, человеческий текст ошибок)
  */
 
 import { apiGet, apiPost } from './client';
@@ -16,6 +16,7 @@ import {
   scheduledOrdersResponseSchema,
 } from '@/schemas/order.schema';
 import { driverLogger } from '@/services/logger.service';
+import { humanApiError } from '@/lib/utils';
 import type {
   AvailableOrder,
   AvailableOrdersMeta,
@@ -182,7 +183,11 @@ export async function confirmScheduledOrder(
       extra: { orderId },
     });
 
-    return { ok: false, reason: expired ? 'expired' : 'unknown', message };
+    return {
+      ok: false,
+      reason: expired ? 'expired' : 'unknown',
+      message: humanApiError(message, 'Сервер не ответил. Попробуйте ещё раз.'),
+    };
   }
 }
 
@@ -216,7 +221,13 @@ export async function releaseOrder(
       action: 'release',
       extra: { orderId },
     });
-    return { ok: false, message };
+    return {
+      ok: false,
+      message: humanApiError(
+        message,
+        'Сервер не принял отказ. Попробуйте ещё раз или свяжитесь с диспетчером.',
+      ),
+    };
   }
 }
 
