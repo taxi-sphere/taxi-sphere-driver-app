@@ -97,7 +97,6 @@ import {
 } from '@/lib/theme';
 import {
   AppText,
-  Badge,
   BottomSheet,
   Button,
   Divider,
@@ -529,6 +528,21 @@ export default function CurrentOrderScreen() {
 
   const target = pickTarget(order, shortAddresses);
   const targetAddress = shortenStreetType(target.address);
+  /**
+   * Кегль адреса — и подъезда рядом с ним.
+   *
+   * Длинный адрес («проспект Красноярский рабочий, 150») крупным шрифтом в
+   * две строки не помещается, поэтому на шаг мельче. Подъезд берёт тот же
+   * кегль: он часть адресной строки, а не подпись к ней.
+   *
+   * Подъезд входит в РАСЧЁТ длины (1.5.33): он делит с адресом одну строку,
+   * и без учёта его «подъезд 12» адрес выбирал бы крупный шрифт, а потом
+   * всё равно переносился. Считаем в символах, как и раньше: «подъезд » —
+   * восемь, плюс сам номер, плюс пробел-разделитель.
+   */
+  const lineChars =
+    targetAddress.length + (target.entrance ? target.entrance.length + 9 : 0);
+  const addressVariant = lineChars > LONG_ADDRESS_CHARS ? 'heading' : 'title';
   const action = ACTION_BY_STATUS[order.status];
 
   /**
@@ -694,23 +708,33 @@ export default function CurrentOrderScreen() {
               {/* Подъезд стоит В СТРОКУ с адресом, пока помещается: своей
                   строки он не стоит. Не поместился — перенос уводит его
                   вниз сам, и мы возвращаемся к прежнему виду вместо
-                  раздавленного адреса. */}
+                  раздавленного адреса.
+
+                  1.5.33: ОБЫЧНЫМ ТЕКСТОМ, а не чипом. Цветная пилюля рядом
+                  с адресом спорила с ним за внимание, хотя адрес здесь
+                  главный. Тем же кеглем и тем же шрифтом подъезд читается
+                  как продолжение адреса — как его и пишут по-русски, — а
+                  не как отдельный орган управления. Отличается только
+                  насыщенностью и цветом: адрес жирный и белый, подъезд
+                  обычный и приглушённый. Потерять его при этом нельзя,
+                  поэтому он остаётся того же размера, а не уходит в мелкий
+                  шрифт. */}
               <View style={styles.addressRow}>
                 {/* Длинный адрес («проспект Красноярский рабочий, 150»)
                     в две строки крупным шрифтом не помещается: сначала
                     сокращаем тип улицы, и только если и этого мало —
                     уменьшаем шрифт на шаг. Обрезать адрес нельзя. */}
                 <AppText
-                  variant={targetAddress.length > LONG_ADDRESS_CHARS ? 'heading' : 'title'}
+                  variant={addressVariant}
                   numberOfLines={2}
                   style={styles.addressText}
                 >
                   {targetAddress}
                 </AppText>
                 {target.entrance ? (
-                  <Badge tone="brand" size="md">
-                    Подъезд {target.entrance}
-                  </Badge>
+                  <AppText variant={addressVariant} weight="500" tone="muted">
+                    подъезд {target.entrance}
+                  </AppText>
                 ) : null}
               </View>
 
