@@ -154,7 +154,14 @@ interface IconButtonProps {
   icon: IoniconName;
   onPress: () => void;
   accessibilityLabel: string;
-  /** Диаметр зоны нажатия. Меньше 48 не ставить без веской причины. */
+  /**
+   * ВИДИМЫЙ диаметр кнопки.
+   *
+   * Зона нажатия от него не зависит: она всегда минимум `touch.min`,
+   * добирается через `hitSlop` (v1.5.31). До этого size задавал и то и
+   * другое, поэтому уменьшить кнопку ради вёрстки значило уменьшить
+   * попадание пальцем — а приложением пользуются за рулём.
+   */
   size?: number;
   color?: string;
   background?: string;
@@ -177,11 +184,22 @@ export function IconButton({
   const scale = useSharedValue(1);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
+  /**
+   * Добор зоны нажатия до `touch.min` со всех сторон.
+   *
+   * Маленькая кнопка нужна вёрстке (в шапке заказа две такие стоят в одной
+   * строке с полосой этапов), но палец за рулём не становится точнее от
+   * того, что кнопку нарисовали меньше. Невидимый запас решает оба вопроса
+   * сразу; при size >= touch.min он равен нулю и ничего не меняет.
+   */
+  const slop = Math.max(0, Math.round((touch.min - size) / 2));
+
   return (
     <Animated.View style={animStyle}>
       <Pressable
         onPress={onPress}
         disabled={disabled}
+        hitSlop={slop}
         onPressIn={() => {
           scale.value = withSpring(PRESS_SCALE, spring.snappy);
         }}

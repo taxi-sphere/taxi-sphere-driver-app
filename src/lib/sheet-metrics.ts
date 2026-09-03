@@ -12,16 +12,33 @@
  *
  * @dependencies: нет (чистая арифметика)
  * @created: 2026-09-03 (v1.5.25)
+ * @updated: 2026-09-03 (1.5.31 — свёрнутая высота считается по замеру шапки)
  */
 
 /**
- * Свёрнутая шторка: полоса этапов и текущая цель с кнопками.
+ * Что BottomSheet рисует НАД переданной шапкой: отступ сверху и полоска-хват.
+ *
+ * Держать в согласии с `headerZone` и `grabberHit` в BottomSheet.tsx:
+ * paddingTop 4 + (paddingVertical 8 × 2 + полоска 4) = 24.
+ */
+export const SHEET_CHROME = 24;
+
+/**
+ * Свёрнутая шторка, ПОКА ШАПКА НЕ ИЗМЕРЕНА.
  *
  * Замерено на эмуляторе 360dp (1.5.23): адрес в ОДНУ строку вместе с чипом
  * подъезда занимает 159, при 170 он влезал впритык. Длинные адреса
  * («Красноярск, ул. Академика Киренского, д. 32, корп. 1») переносятся на
  * вторую строку — это ещё ~34, и чип подъезда уезжал под обрез. Подъезд
  * терять нельзя: водитель без него звонит клиенту и спрашивает.
+ *
+ * С 1.5.31 это только ЗАПАСНОЕ значение на первый кадр: высота шапки стала
+ * переменной (примечание диспетчера к адресу есть не у каждого заказа, а
+ * подъезд то встаёт в строку с адресом, то переносится), и держать её
+ * константой значит либо резать примечание молча, либо всегда занимать
+ * место под то, чего нет. Экран меряет шапку и передаёт
+ * `SHEET_CHROME + высота`. Ровно эта арифметика ломалась дважды и оба раза
+ * тихо — см. шапку файла; замер убирает саму возможность.
  */
 export const SHEET_COLLAPSED = 215;
 
@@ -50,8 +67,9 @@ export const MAP_MIN_VISIBLE = 56;
 export function sheetExpandedHeight(
   containerHeight: number,
   actionBarHeight: number,
+  collapsedHeight: number = SHEET_COLLAPSED,
 ): number {
-  if (containerHeight <= 0) return SHEET_COLLAPSED;
+  if (containerHeight <= 0) return collapsedHeight;
   const available = containerHeight - actionBarHeight - MAP_MIN_VISIBLE;
-  return Math.max(SHEET_COLLAPSED, available);
+  return Math.max(collapsedHeight, available);
 }

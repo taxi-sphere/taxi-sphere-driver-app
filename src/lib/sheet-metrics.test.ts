@@ -12,7 +12,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { MAP_MIN_VISIBLE, SHEET_COLLAPSED, sheetExpandedHeight } from '@/lib/sheet-metrics';
+import {
+  MAP_MIN_VISIBLE,
+  SHEET_CHROME,
+  SHEET_COLLAPSED,
+  sheetExpandedHeight,
+} from '@/lib/sheet-metrics';
 
 /** Эмулятор 360×800dp: контейнер под шапкой и вкладками. */
 const CONTAINER = 616;
@@ -45,5 +50,25 @@ describe('sheetExpandedHeight', () => {
 
   it('без кнопки главного действия шторка занимает и её место', () => {
     expect(sheetExpandedHeight(CONTAINER, 0)).toBe(CONTAINER - MAP_MIN_VISIBLE);
+  });
+
+  it('нижняя граница берётся из ИЗМЕРЕННОЙ шапки, а не из константы', () => {
+    // 1.5.31: шапка стала переменной высоты (примечание к адресу есть не
+    // всегда), и на низком экране схлопывать шторку ниже неё нельзя —
+    // обрежется как раз то, что дописали.
+    const measured = SHEET_CHROME + 260;
+    expect(sheetExpandedHeight(300, ACTION_BAR, measured)).toBe(measured);
+    expect(sheetExpandedHeight(0, ACTION_BAR, measured)).toBe(measured);
+  });
+
+  it('без замера ведёт себя как раньше', () => {
+    expect(sheetExpandedHeight(300, ACTION_BAR)).toBe(SHEET_COLLAPSED);
+  });
+
+  it('высокого экрана замер шапки не касается', () => {
+    // Развёрнутая высота от шапки не зависит вовсе: та задаёт только пол.
+    expect(sheetExpandedHeight(CONTAINER, ACTION_BAR, SHEET_CHROME + 200)).toBe(
+      CONTAINER - ACTION_BAR - MAP_MIN_VISIBLE,
+    );
   });
 });

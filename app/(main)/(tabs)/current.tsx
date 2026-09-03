@@ -45,7 +45,8 @@
  * @dependencies: useActiveOrders, useOrderActions, @/components/ui,
  *                @/components/order/*, @/components/map/OrderMap
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-03 (v1.5.27 — переключатель заказов над картой, отказ от встречного)
+ * @updated: 2026-09-03 (1.5.31 — кнопки в строку с полосой этапов, подъезд к адресу,
+ *                        примечание к адресу в шапке, чипы без номеров)
  */
 
 import {
@@ -113,7 +114,7 @@ import {
 } from '@/components/ui';
 import { OrderProgress } from '@/components/order/OrderProgress';
 import { OrderMap } from '@/components/map/OrderMap';
-import { SHEET_COLLAPSED, sheetExpandedHeight } from '@/lib/sheet-metrics';
+import { SHEET_CHROME, SHEET_COLLAPSED, sheetExpandedHeight } from '@/lib/sheet-metrics';
 import type { CurrentOrder, OrderStatus } from '@/types/order';
 
 /**
@@ -134,6 +135,17 @@ const WAIT_NOTE_HEIGHT = 34;
  * Замерено на 360 точках: до 30 символов адрес встаёт в две строки `title`.
  */
 const LONG_ADDRESS_CHARS = 30;
+
+/**
+ * Видимый диаметр кнопок звонка и навигатора в шапке заказа.
+ *
+ * Меньше обычных 48, потому что они делят строку с полосой этапов, а той
+ * нужна ширина под четыре подписи: «Ожидание» шрифтом 12 (мельче в проекте
+ * нельзя) занимает около 59 точек, четыре слота — около 236 из 328
+ * доступных. Зона нажатия от размера НЕ зависит: `IconButton` добирает её
+ * до 48 невидимым запасом.
+ */
+const HEADER_ACTION_SIZE = 36;
 /** Панель главного действия под шторкой. */
 const ACTION_BAR_HEIGHT = touch.primary + spacing.lg * 2;
 /** Что водитель делает на каждом этапе. */
@@ -187,6 +199,15 @@ export default function CurrentOrderScreen() {
    * выше этого контейнера на шапку, полосу баланса и вкладки.
    */
   const [containerHeight, setContainerHeight] = useState(0);
+  /**
+   * Высота шапки шторки — ИЗМЕРЕННАЯ, а не посчитанная.
+   *
+   * Шапка переменной высоты: примечание диспетчера к адресу есть не у
+   * каждого заказа, а чип подъезда то встаёт в строку с адресом, то
+   * переносится под него. Константа тут либо режет примечание молча, либо
+   * всегда держит место под то, чего нет. 0 — ещё не мерили.
+   */
+  const [headerHeight, setHeaderHeight] = useState(0);
   /** Идёт отказ от заказа — гасим кнопку, чтобы не нажали дважды. */
   const [releasing, setReleasing] = useState(false);
   const queryClient = useQueryClient();
@@ -532,6 +553,7 @@ export default function CurrentOrderScreen() {
     : action
       ? ACTION_BAR_HEIGHT
       : 0;
+  const collapsedHeight = headerHeight > 0 ? SHEET_CHROME + headerHeight : SHEET_COLLAPSED;
   const canShowMap = mapAvailable && order.pickupLat != null && order.pickupLng != null;
 
   const routePoints: RoutePoint[] = buildRoutePoints(order, shortAddresses, openNavigator);
@@ -543,7 +565,7 @@ export default function CurrentOrderScreen() {
     >
       {canShowMap ? (
         <MapErrorBoundary orderId={order.id}>
-          <OrderMap order={order} fill bottomInset={SHEET_COLLAPSED + actionBarHeight} />
+          <OrderMap order={order} fill bottomInset={collapsedHeight + actionBarHeight} />
         </MapErrorBoundary>
       ) : (
         <View style={[styles.mapFallback, { backgroundColor: colors.mapPlaceholder }]}>
@@ -557,46 +579,49 @@ export default function CurrentOrderScreen() {
       {/* Плавающая строка над картой: заказ (или переключатель) и таймер */}
       <View style={styles.floatingTop} pointerEvents="box-none">
         {/**
-         * Со встречным заказом чип с номером превращается в переключатель.
+         * Переключатель заказов — только когда переключать есть на что.
          *
-         * 1.5.27: раньше переключатель жил в шапке шторки и занимал там
-         * целую строку — а строк в шторке считаное число. Здесь он не стоит
-         * ни одной: место над картой всё равно занято чипом с номером.
-         * Заодно видно, какой заказ открыт, не разворачивая шторку.
+         * 1.5.27: переехал сюда из шапки шторки, где занимал целую строку.
+         * 1.5.31: НОМЕРА УБРАНЫ. `orderNumber` — автоинкремент, до десяти
+         * знаков; «Текущий · № 1048576» рядом со вторым таким же не
+         * помещается на 360 точках. Номер нужен только чтобы назвать заказ
+         * диспетчеру, и живёт теперь в «Деталях» — там, где его читают, а
+         * не там, где на него смотрят каждую секунду.
+         *
+         * Одиночный чип с номером убран совсем: он не сообщал ничего —
+         * водитель и так знает, что заказ у него один, — а строку над
+         * картой занимал.
          */}
-        {orders && orders.length > 1 ? (
-          orders.map((item, index) => {
-            const active = item.id === order.id;
-            return (
-              <ScalePress
-                key={item.id}
-                onPress={() => setSelectedId(item.id)}
-                accessibilityLabel={`Заказ № ${item.orderNumber}`}
-              >
-                <Surface
-                  level={2}
-                  padded={false}
-                  radius={radius.pill}
-                  style={[
-                    styles.floatingChip,
-                    active && { backgroundColor: colors.primary },
-                  ]}
+        {orders && orders.length > 1
+          ? orders.map((item, index) => {
+              const active = item.id === order.id;
+              const title = index === 0 ? 'Текущий' : 'Встречный';
+              return (
+                <ScalePress
+                  key={item.id}
+                  onPress={() => setSelectedId(item.id)}
+                  accessibilityLabel={`${title}: заказ № ${item.orderNumber}`}
                 >
-                  <AppText
-                    variant="labelStrong"
-                    style={{ color: active ? colors.textInverse : colors.textSecondary }}
+                  <Surface
+                    level={2}
+                    padded={false}
+                    radius={radius.pill}
+                    style={[
+                      styles.floatingChip,
+                      active && { backgroundColor: colors.primary },
+                    ]}
                   >
-                    {index === 0 ? 'Текущий' : 'Встречный'} · № {item.orderNumber}
-                  </AppText>
-                </Surface>
-              </ScalePress>
-            );
-          })
-        ) : (
-          <Surface level={2} padded={false} radius={radius.pill} style={styles.floatingChip}>
-            <AppText variant="labelStrong">№ {order.orderNumber}</AppText>
-          </Surface>
-        )}
+                    <AppText
+                      variant="labelStrong"
+                      style={{ color: active ? colors.textInverse : colors.textSecondary }}
+                    >
+                      {title}
+                    </AppText>
+                  </Surface>
+                </ScalePress>
+              );
+            })
+          : null}
 
         {order.status === 'driver_arrived' && (
           <Surface level={2} padded={false} radius={radius.pill} style={styles.floatingChip}>
@@ -609,63 +634,93 @@ export default function CurrentOrderScreen() {
       </View>
 
       <BottomSheet
-        collapsedHeight={SHEET_COLLAPSED}
-        expandedHeight={sheetExpandedHeight(containerHeight, actionBarHeight)}
+        collapsedHeight={collapsedHeight}
+        expandedHeight={sheetExpandedHeight(containerHeight, actionBarHeight, collapsedHeight)}
         bottomOffset={actionBarHeight}
         header={
-          <View style={styles.sheetHeader}>
-            <OrderProgress status={order.status} />
-
-            {/* Действия стоят у того адреса, к которому относятся, а не
-                отдельной строкой ниже. Строка с именем и номером клиента
-                убрана: номер всё равно под маской — прочитать и набрать его
-                нельзя, — а места она занимала больше, чем обе кнопки. */}
-            <View style={styles.targetBlock}>
-              <View style={styles.targetRow}>
-                <View style={styles.targetText}>
-                  {/* Город приписан к подписи этапа, а не отдельной строкой:
-                      в шторке каждая строка на счету, а нужен он только в
-                      межгороде — сервер и присылает его лишь тогда. */}
-                  <AppText variant="overline" tone="muted">
-                    {target.label}
-                    {order.cityLabel ? ` · ${order.cityLabel}` : ''}
-                  </AppText>
-                  {/* Длинный адрес («проспект Красноярский рабочий, 150»)
-                      в две строки крупным шрифтом не помещается: сначала
-                      сокращаем тип улицы, и только если и этого мало —
-                      уменьшаем шрифт на шаг. Обрезать адрес нельзя. */}
-                  <AppText
-                    variant={targetAddress.length > LONG_ADDRESS_CHARS ? 'heading' : 'title'}
-                    numberOfLines={2}
-                  >
-                    {targetAddress}
-                  </AppText>
-                </View>
-
-                <View style={styles.targetActions}>
+          <View
+            style={styles.sheetHeader}
+            onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
+          >
+            {/**
+             * Полоса этапов и кнопки — В ОДНОЙ строке (1.5.31).
+             *
+             * Раньше кнопки стояли справа от адреса и съедали его ширину:
+             * «Набережная, д. 76» не помещалось в строку и переносилось.
+             * Здесь они не стоят ни одной новой строки — полоса всё равно
+             * занимает эту, а справа от неё было пусто.
+             *
+             * Кнопки уменьшены, чтобы четыре подписи этапов не сжались до
+             * переноса. Зона нажатия при этом осталась прежней: `IconButton`
+             * добирает её невидимым запасом (см. его шапку).
+             */}
+            <View style={styles.progressRow}>
+              <View style={styles.progressBar}>
+                <OrderProgress status={order.status} />
+              </View>
+              <View style={styles.targetActions}>
+                <IconButton
+                  icon="call"
+                  size={HEADER_ACTION_SIZE}
+                  onPress={() => void askWhomToCall()}
+                  accessibilityLabel="Позвонить"
+                  background={colors.successSoft}
+                  color={colors.success}
+                />
+                {target.lat != null && target.lng != null && (
                   <IconButton
-                    icon="call"
-                    onPress={() => void askWhomToCall()}
-                    accessibilityLabel="Позвонить"
-                    background={colors.successSoft}
-                    color={colors.success}
+                    icon="navigate"
+                    size={HEADER_ACTION_SIZE}
+                    onPress={() => openNavigator(target.lat!, target.lng!)}
+                    accessibilityLabel="Открыть в навигаторе"
+                    background={colors.primarySoft}
+                    color={colors.primary}
                   />
-                  {target.lat != null && target.lng != null && (
-                    <IconButton
-                      icon="navigate"
-                      onPress={() => openNavigator(target.lat!, target.lng!)}
-                      accessibilityLabel="Открыть в навигаторе"
-                      background={colors.primarySoft}
-                      color={colors.primary}
-                    />
-                  )}
-                </View>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.targetBlock}>
+              {/* Город приписан к подписи этапа, а не отдельной строкой: в
+                  шторке каждая строка на счету, а нужен он только в
+                  межгороде — сервер и присылает его лишь тогда. Само слово
+                  этапа не лишнее: подпись принимает и значение
+                  «Остановка», о которой полоса этапов не знает вовсе. */}
+              <AppText variant="overline" tone="muted">
+                {target.label}
+                {order.cityLabel ? ` · ${order.cityLabel}` : ''}
+              </AppText>
+
+              {/* Подъезд стоит В СТРОКУ с адресом, пока помещается: своей
+                  строки он не стоит. Не поместился — перенос уводит его
+                  вниз сам, и мы возвращаемся к прежнему виду вместо
+                  раздавленного адреса. */}
+              <View style={styles.addressRow}>
+                {/* Длинный адрес («проспект Красноярский рабочий, 150»)
+                    в две строки крупным шрифтом не помещается: сначала
+                    сокращаем тип улицы, и только если и этого мало —
+                    уменьшаем шрифт на шаг. Обрезать адрес нельзя. */}
+                <AppText
+                  variant={targetAddress.length > LONG_ADDRESS_CHARS ? 'heading' : 'title'}
+                  numberOfLines={2}
+                  style={styles.addressText}
+                >
+                  {targetAddress}
+                </AppText>
+                {target.entrance ? (
+                  <Badge tone="brand" size="md">
+                    Подъезд {target.entrance}
+                  </Badge>
+                ) : null}
               </View>
 
-              {target.entrance ? (
-                <Badge tone="brand" size="md" style={styles.entrance}>
-                  Подъезд {target.entrance}
-                </Badge>
+              {/* Примечание диспетчера к этому адресу. Одной строкой:
+                  полностью оно есть ниже, в развёрнутом маршруте, а здесь
+                  важно, что оно вообще ЕСТЬ. */}
+              {target.note ? (
+                <AppText variant="caption" tone="warning" numberOfLines={1}>
+                  {target.note}
+                </AppText>
               ) : null}
             </View>
           </View>
@@ -700,6 +755,9 @@ export default function CurrentOrderScreen() {
               Детали
             </AppText>
             <Surface level={0} padded={false} style={styles.details}>
+              {/* Номер: с 1.5.31 его нет на чипе над картой, а назвать заказ
+                  диспетчеру по телефону чем-то надо. */}
+              <DetailRow label="Заказ" value={`№ ${order.orderNumber}`} />
               <DetailRow label="Стоимость" value={formatCurrency(order.estimatedPrice)} strong />
               {order.estimatedKm != null && (
                 <DetailRow label="Расстояние" value={formatDistance(order.estimatedKm)} />
@@ -794,16 +852,29 @@ type ShortAddresses = { pickup: string; stops: string[]; dropoff: string };
  * или конечная точка. Именно этот адрес и стоит в шторке крупным шрифтом:
  * остальные нужны реже, и им место в развёрнутом маршруте.
  */
-function pickTarget(
-  order: CurrentOrder,
-  short: ShortAddresses,
-): { label: string; address: string; entrance: string | null; lat: number | null; lng: number | null } {
+interface Target {
+  label: string;
+  address: string;
+  entrance: string | null;
+  /**
+   * Примечание диспетчера К ЭТОМУ адресу (`pickupNote` / `dropoffNote` /
+   * `stop.note`). До 1.5.31 его было видно только в развёрнутом маршруте —
+   * то есть практически никогда: шторку за рулём не разворачивают, а
+   * «ждать у шлагбаума» нужно знать до того, как подъехал.
+   */
+  note: string | null;
+  lat: number | null;
+  lng: number | null;
+}
+
+function pickTarget(order: CurrentOrder, short: ShortAddresses): Target {
   if (order.status === 'assigned' || order.status === 'driver_arrived') {
     const point = splitAddressEntrance(short.pickup || order.pickupAddress, order.pickupEntrance);
     return {
       label: 'Подача',
       address: point.address,
       entrance: point.entrance,
+      note: order.pickupNote,
       lat: order.pickupLat,
       lng: order.pickupLng,
     };
@@ -816,6 +887,7 @@ function pickTarget(
       label: 'Остановка',
       address: point.address,
       entrance: point.entrance,
+      note: firstStop.note,
       lat: firstStop.lat,
       lng: firstStop.lng,
     };
@@ -829,6 +901,7 @@ function pickTarget(
     label: 'Куда',
     address: point.address || 'Адрес не указан',
     entrance: point.entrance,
+    note: order.dropoffNote,
     lat: order.dropoffLat,
     lng: order.dropoffLng,
   };
@@ -1029,9 +1102,19 @@ const createStyles = (t: Theme) =>
       gap: spacing.md,
     },
     targetBlock: { gap: spacing.xs },
-    entrance: { marginTop: spacing.xs },
-    targetRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
-    targetText: { flex: 1, gap: spacing.xs },
+    // Полоса этапов забирает всю свободную ширину и потому начинается у
+    // левого края шторки; кнопки прижаты к правому.
+    progressRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    progressBar: { flex: 1 },
+    // Адрес и чип подъезда в одну строку, с переносом: не поместились —
+    // подъезд уходит вниз сам, а не давит адрес.
+    addressRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      gap: spacing.sm,
+    },
+    addressText: { flexShrink: 1 },
     targetActions: { flexDirection: 'row', gap: spacing.sm },
 
     sheetBody: { padding: spacing.lg, paddingTop: 0, gap: spacing.lg },
