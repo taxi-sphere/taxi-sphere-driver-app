@@ -20,7 +20,8 @@
  *       машине» появилось на сервере ещё в v1.99.58, но показать второй
  *       заказ было негде: `/orders/current` отдаёт ровно один. Теперь
  *       экран берёт `/orders/active` (список) и, если заказов два,
- *       показывает переключатель между ними.
+ *       показывает переключатель между ними — с 1.5.27 он живёт чипами
+ *       над картой, а не строкой в шторке.
  *
  *   ЧТО СОХРАНЕНО БЕЗ ИЗМЕНЕНИЙ (проверено при переносе):
  *     • v1.5.5 guard `pickupLat/Lng` перед картой — react-native-maps падал
@@ -28,8 +29,8 @@
  *     • v1.5.5 логирование всех ошибок действий в админку через
  *       driverLogger — иначе водитель видел silent-fail, а админ не мог
  *       понять, почему заказ «завис»;
- *     • v1.5.12 однократный вывод подъезда (`splitAddressEntrance`) и снятие общего
- *       города у всех точек (`stripSharedCityPrefix`);
+ *     • v1.5.12 однократный вывод подъезда (`splitAddressEntrance`); снятие
+ *       города переехало на сервер в v1.99.78 — см. `shortAddresses`;
  *     • подтверждение каждого действия через Alert;
  *     • таймер ожидания клиента и авто-возврат к списку после завершения.
  *
@@ -44,7 +45,7 @@
  * @dependencies: useActiveOrders, useOrderActions, @/components/ui,
  *                @/components/order/*, @/components/map/OrderMap
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-02 (v1.5.23 — кнопки у адреса, выбор кому звонить, низкая шторка)
+ * @updated: 2026-09-03 (v1.5.27 — переключатель заказов над картой, отказ от встречного)
  */
 
 import {
@@ -66,7 +67,9 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useActiveOrders } from '@/hooks/useCurrentOrder';
+import { useQueryClient } from '@tanstack/react-query';
+import { useActiveOrders, activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
+import { releaseOrder } from '@/api/orders.api';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useSettingsStore } from '@/stores/settings.store';
 import { driverLogger } from '@/services/logger.service';
@@ -77,8 +80,8 @@ import {
   formatDuration,
   formatTime,
   formatTimer,
+  shortenStreetType,
   splitAddressEntrance,
-  stripSharedCityPrefix,
 } from '@/lib/utils';
 import { ORDER_COMPLETE_REDIRECT_MS } from '@/lib/constants';
 import { isEmbeddedMapAvailable, EMBEDDED_MAP_UNAVAILABLE_HINT } from '@/lib/map-availability';
@@ -119,6 +122,18 @@ import type { CurrentOrder, OrderStatus } from '@/types/order';
  */
 const mapAvailable = isEmbeddedMapAvailable();
 
+/**
+ * Строка «сначала завершите текущую» над кнопкой отказа.
+ *
+ * Две строки текста подписью — ровно столько, чтобы объяснить, и ни строкой
+ * больше: полоса действия и так съедает низ экрана.
+ */
+const WAIT_NOTE_HEIGHT = 34;
+/**
+ * Длина адреса, после которой заголовок переходит на шрифт поменьше.
+ * Замерено на 360 точках: до 30 символов адрес встаёт в две строки `title`.
+ */
+const LONG_ADDRESS_CHARS = 30;
 /** Панель главного действия под шторкой. */
 const ACTION_BAR_HEIGHT = touch.primary + spacing.lg * 2;
 /** Что водитель делает на каждом этапе. */
@@ -172,6 +187,9 @@ export default function CurrentOrderScreen() {
    * выше этого контейнера на шапку, полосу баланса и вкладки.
    */
   const [containerHeight, setContainerHeight] = useState(0);
+  /** Идёт отказ от заказа — гасим кнопку, чтобы не нажали дважды. */
+  const [releasing, setReleasing] = useState(false);
+  const queryClient = useQueryClient();
   const confirm = useConfirm();
   const notify = useNotify();
 
@@ -190,18 +208,22 @@ export default function CurrentOrderScreen() {
   const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
 
   /**
-   * v1.5.12: адреса точек с общим городом, снятым сразу у всех.
-   * Считается по самим данным: если первый сегмент одинаков у всех точек
-   * заказа — он избыточен. Разные города остаются на месте, это сигнал
-   * «выезд за город». Порядок совпадает с порядком отрисовки ниже.
+   * Адреса точек в порядке отрисовки.
+   *
+   * 1.5.27: город здесь больше не снимается. Это делает сервер (v1.99.78),
+   * и делает правильнее: он знает базовый город службы, а приложение
+   * выводило город из совпадения двух точек — у заказа с одной точкой
+   * (клиент не сказал, куда едет) город оставался и съедал сам адрес.
+   * Оставлять `stripSharedCityPrefix` поверх серверной чистки нельзя: у
+   * двух адресов на одной улице совпадёт уже НЕ город, а улица, и «Ленина,
+   * 1» превратилось бы в «1».
    */
   const shortAddresses = useMemo(() => {
-    const raw = [
+    const short = [
       order?.pickupAddress ?? '',
       ...(order?.stops ?? []).map((s) => s.address),
       order?.dropoffAddress ?? '',
     ];
-    const short = stripSharedCityPrefix(raw);
     return {
       pickup: short[0] ?? '',
       stops: short.slice(1, short.length - 1),
@@ -310,6 +332,41 @@ export default function CurrentOrderScreen() {
     },
     [notify],
   );
+
+  /**
+   * Отказ от взятого заказа.
+   *
+   * Подтверждение обязательно: заказ уйдёт другому водителю, и отменить это
+   * нажатие уже нельзя. Про штраф говорим ЗАРАНЕЕ, но без цифр — окно и
+   * величина штрафа настраиваются на сервере, и захардкоженное «минус 5
+   * баллов» рано или поздно соврёт.
+   */
+  const handleRelease = useCallback(async () => {
+    if (!order) return;
+    const ok = await confirm({
+      title: 'Отказаться от заказа?',
+      message:
+        `Заказ № ${order.orderNumber} вернётся в поиск и уйдёт другому водителю. ` +
+        'Если с момента взятия прошло много времени, отказ учтётся в рейтинге.',
+      confirmLabel: 'Отказаться',
+      variant: 'danger',
+    });
+    if (!ok) return;
+
+    setReleasing(true);
+    const result = await releaseOrder(order.id);
+    setReleasing(false);
+
+    if (!result.ok) {
+      await notify('Не удалось отказаться', result.message);
+      return;
+    }
+
+    // Выбор сбрасываем: заказа, который был открыт, в списке больше нет.
+    setSelectedId(null);
+    await queryClient.invalidateQueries({ queryKey: activeOrdersQueryKey });
+    await notify('Заказ передан в поиск', result.message);
+  }, [order, confirm, notify, queryClient]);
 
   /** Одно подтверждение на все три действия — текст берётся по статусу. */
   const handlePrimaryAction = useCallback(() => {
@@ -450,19 +507,31 @@ export default function CurrentOrderScreen() {
   // ─── Активный заказ ──────────────────────────────────────────────────
 
   const target = pickTarget(order, shortAddresses);
+  const targetAddress = shortenStreetType(target.address);
   const action = ACTION_BY_STATUS[order.status];
+
   /**
-   * 1.5.24: второй строки кнопок больше нет.
+   * Открытый заказ ждёт своей очереди: клиент другого заказа ещё в машине.
    *
-   * Кнопка «Встречный» только переключала на вкладку «Заказы» — то есть
-   * дублировала вкладку, которая и так внизу экрана. При этом держала целую
-   * строку и почти всю смену была погашенной подписью «Встречный — после
-   * посадки». Взять встречный водитель идёт туда же, куда за любым другим
-   * заказом: в «Заказы».
+   * То же правило, что теперь проверяет сервер (v1.99.78). До него «Я на
+   * месте» у встречного заказа не только показывалось, но и принималось:
+   * заказ уезжал в `driver_arrived`, и диспетчер видел машину у клиента,
+   * которого она ещё даже не начинала везти.
    */
-  // Нет кнопки — нет и полосы под неё: иначе шторка висела бы над
-  // пустой полосой в 88.
-  const actionBarHeight = action ? ACTION_BAR_HEIGHT : 0;
+  const waitsForCurrent = Boolean(
+    orders?.some((o) => o.id !== order.id && o.status === 'in_progress'),
+  );
+  /** Отказаться можно только до посадки — дальше это дело диспетчера. */
+  const canRelease =
+    waitsForCurrent && (order.status === 'assigned' || order.status === 'driver_arrived');
+
+  // Нет кнопки — нет и полосы под неё: иначе шторка висела бы над пустой
+  // полосой в 88. У ждущего заказа полоса выше на строку объяснения.
+  const actionBarHeight = waitsForCurrent
+    ? ACTION_BAR_HEIGHT + WAIT_NOTE_HEIGHT
+    : action
+      ? ACTION_BAR_HEIGHT
+      : 0;
   const canShowMap = mapAvailable && order.pickupLat != null && order.pickupLng != null;
 
   const routePoints: RoutePoint[] = buildRoutePoints(order, shortAddresses, openNavigator);
@@ -485,11 +554,49 @@ export default function CurrentOrderScreen() {
         </View>
       )}
 
-      {/* Плавающая строка над картой: номер заказа и таймер ожидания */}
+      {/* Плавающая строка над картой: заказ (или переключатель) и таймер */}
       <View style={styles.floatingTop} pointerEvents="box-none">
-        <Surface level={2} padded={false} radius={radius.pill} style={styles.floatingChip}>
-          <AppText variant="labelStrong">№ {order.orderNumber}</AppText>
-        </Surface>
+        {/**
+         * Со встречным заказом чип с номером превращается в переключатель.
+         *
+         * 1.5.27: раньше переключатель жил в шапке шторки и занимал там
+         * целую строку — а строк в шторке считаное число. Здесь он не стоит
+         * ни одной: место над картой всё равно занято чипом с номером.
+         * Заодно видно, какой заказ открыт, не разворачивая шторку.
+         */}
+        {orders && orders.length > 1 ? (
+          orders.map((item, index) => {
+            const active = item.id === order.id;
+            return (
+              <ScalePress
+                key={item.id}
+                onPress={() => setSelectedId(item.id)}
+                accessibilityLabel={`Заказ № ${item.orderNumber}`}
+              >
+                <Surface
+                  level={2}
+                  padded={false}
+                  radius={radius.pill}
+                  style={[
+                    styles.floatingChip,
+                    active && { backgroundColor: colors.primary },
+                  ]}
+                >
+                  <AppText
+                    variant="labelStrong"
+                    style={{ color: active ? colors.textInverse : colors.textSecondary }}
+                  >
+                    {index === 0 ? 'Текущий' : 'Встречный'} · № {item.orderNumber}
+                  </AppText>
+                </Surface>
+              </ScalePress>
+            );
+          })
+        ) : (
+          <Surface level={2} padded={false} radius={radius.pill} style={styles.floatingChip}>
+            <AppText variant="labelStrong">№ {order.orderNumber}</AppText>
+          </Surface>
+        )}
 
         {order.status === 'driver_arrived' && (
           <Surface level={2} padded={false} radius={radius.pill} style={styles.floatingChip}>
@@ -507,42 +614,6 @@ export default function CurrentOrderScreen() {
         bottomOffset={actionBarHeight}
         header={
           <View style={styles.sheetHeader}>
-            {/* Переключатель появляется только при встречном заказе —
-                в обычной поездке лишний элемент здесь ни к чему. */}
-            {orders && orders.length > 1 && (
-              <View style={styles.orderSwitch}>
-                {orders.map((item, index) => {
-                  const active = item.id === order.id;
-                  return (
-                    <ScalePress
-                      key={item.id}
-                      onPress={() => setSelectedId(item.id)}
-                      accessibilityLabel={`Заказ № ${item.orderNumber}`}
-                      style={styles.orderSwitchItem}
-                    >
-                      <View
-                        style={[
-                          styles.orderTab,
-                          {
-                            backgroundColor: active ? colors.primary : colors.surfaceSunken,
-                          },
-                        ]}
-                      >
-                        <AppText
-                          variant="label"
-                          weight="700"
-                          style={{ color: active ? colors.textInverse : colors.textSecondary }}
-                          numberOfLines={1}
-                        >
-                          {index === 0 ? 'Текущий' : 'Встречный'} · №{item.orderNumber}
-                        </AppText>
-                      </View>
-                    </ScalePress>
-                  );
-                })}
-              </View>
-            )}
-
             <OrderProgress status={order.status} />
 
             {/* Действия стоят у того адреса, к которому относятся, а не
@@ -559,8 +630,15 @@ export default function CurrentOrderScreen() {
                     {target.label}
                     {order.cityLabel ? ` · ${order.cityLabel}` : ''}
                   </AppText>
-                  <AppText variant="title" numberOfLines={2}>
-                    {target.address}
+                  {/* Длинный адрес («проспект Красноярский рабочий, 150»)
+                      в две строки крупным шрифтом не помещается: сначала
+                      сокращаем тип улицы, и только если и этого мало —
+                      уменьшаем шрифт на шаг. Обрезать адрес нельзя. */}
+                  <AppText
+                    variant={targetAddress.length > LONG_ADDRESS_CHARS ? 'heading' : 'title'}
+                    numberOfLines={2}
+                  >
+                    {targetAddress}
                   </AppText>
                 </View>
 
@@ -653,22 +731,46 @@ export default function CurrentOrderScreen() {
       </BottomSheet>
 
       {/* Панель главного действия. Вне шторки — чтобы не двигалась. */}
-      {action && (
+      {(action || waitsForCurrent) && (
         <View
           style={[
             styles.actionBar,
             { backgroundColor: colors.surface, height: actionBarHeight },
           ]}
         >
-          <Button
-            onPress={handlePrimaryAction}
-            size="lg"
-            fullWidth
-            variant={order.status === 'in_progress' ? 'success' : 'primary'}
-            loading={arrive.isPending || start.isPending || complete.isPending}
-          >
-            {action.label}
-          </Button>
+          {waitsForCurrent ? (
+            <>
+              {/* Объяснение, а не погашенная кнопка: серая кнопка читается
+                  как поломка, строка говорит, чего ждать и когда. */}
+              <AppText variant="caption" tone="muted" center style={styles.waitNote}>
+                Сначала завершите текущую поездку — потом этот заказ станет
+                текущим
+              </AppText>
+              {canRelease && (
+                <Button
+                  onPress={handleRelease}
+                  size="lg"
+                  fullWidth
+                  variant="danger"
+                  loading={releasing}
+                >
+                  ОТКАЗАТЬСЯ ОТ ЗАКАЗА
+                </Button>
+              )}
+            </>
+          ) : (
+            action && (
+              <Button
+                onPress={handlePrimaryAction}
+                size="lg"
+                fullWidth
+                variant={order.status === 'in_progress' ? 'success' : 'primary'}
+                loading={arrive.isPending || start.isPending || complete.isPending}
+              >
+                {action.label}
+              </Button>
+            )
+          )}
         </View>
       )}
     </View>
@@ -752,7 +854,7 @@ function buildRoutePoints(
   const points: RoutePoint[] = [
     {
       kind: 'pickup',
-      address: pickup.address,
+      address: shortenStreetType(pickup.address),
       note: joinNotes(pickup.entrance ? `Подъезд ${pickup.entrance}` : null, order.pickupNote),
       action: navAction(order.pickupLat, order.pickupLng),
     },
@@ -762,7 +864,7 @@ function buildRoutePoints(
     const point = splitAddressEntrance(short.stops[index] ?? stop.address, stop.entrance);
     points.push({
       kind: 'stop',
-      address: point.address,
+      address: shortenStreetType(point.address),
       note: joinNotes(point.entrance ? `Подъезд ${point.entrance}` : null, stop.note),
       action: navAction(stop.lat, stop.lng),
     });
@@ -775,9 +877,20 @@ function buildRoutePoints(
     );
     points.push({
       kind: 'dropoff',
-      address: dropoff.address,
+      address: shortenStreetType(dropoff.address),
       note: joinNotes(dropoff.entrance ? `Подъезд ${dropoff.entrance}` : null, order.dropoffNote),
       action: navAction(order.dropoffLat, order.dropoffLng),
+    });
+  } else {
+    /**
+     * Заказ без конечной точки — обычное дело: клиент сказал «поехали»,
+     * а куда, скажет в машине. Раньше маршрут обрывался одной точкой без
+     * пояснения, и это читалось как потерянные данные.
+     */
+    points.push({
+      kind: 'dropoff',
+      address: 'Адрес назначения уточнит клиент',
+      muted: true,
     });
   }
 
@@ -915,14 +1028,6 @@ const createStyles = (t: Theme) =>
       paddingBottom: spacing.md,
       gap: spacing.md,
     },
-    orderSwitch: { flexDirection: 'row', gap: spacing.sm },
-    orderSwitchItem: { flex: 1 },
-    orderTab: {
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
-      borderRadius: radius.pill,
-      alignItems: 'center',
-    },
     targetBlock: { gap: spacing.xs },
     entrance: { marginTop: spacing.xs },
     targetRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
@@ -944,6 +1049,7 @@ const createStyles = (t: Theme) =>
     comment: { gap: spacing.xs },
     commentText: { marginTop: spacing.xs },
 
+    waitNote: { marginBottom: spacing.xs },
     actionBar: {
       position: 'absolute',
       left: 0,

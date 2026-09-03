@@ -37,6 +37,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
+import { usableChangelog } from '@/lib/utils';
 import { useUpdateRequestStore } from '@/stores/update-request.store';
 import type { DriverAppLatestPublicDTO } from '@/api/app.api';
 import { downloadAndInstallApk, type DownloadProgress } from '@/services/apk-installer';
@@ -202,9 +203,10 @@ export function AppUpdateNotifier() {
               Текущая версия {currentVersion} больше не поддерживается.
               Обновитесь до {latest.latestVersion} чтобы продолжить работу.
             </Text>
-            {latest.changelog ? (
+            {/* Ссылку на GitHub водителю не показываем — см. usableChangelog. */}
+            {usableChangelog(latest.changelog) ? (
               <Text style={styles.changelog} numberOfLines={6}>
-                {latest.changelog}
+                {usableChangelog(latest.changelog)}
               </Text>
             ) : null}
             <TouchableOpacity

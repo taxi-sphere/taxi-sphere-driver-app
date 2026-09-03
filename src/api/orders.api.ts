@@ -186,6 +186,40 @@ export async function confirmScheduledOrder(
   }
 }
 
+/**
+ * Отказаться от УЖЕ ВЗЯТОГО заказа — он вернётся в поиск.
+ *
+ * Не `decline`: тот отклоняет предложение, которое ещё висит, и на
+ * назначенном заказе отвечает 404. Сервер сам решает, попал ли отказ в окно
+ * без штрафа, и говорит об этом в `penalised` — приложение это не считает.
+ */
+export async function releaseOrder(
+  orderId: string,
+): Promise<
+  { ok: true; penalised: boolean; message: string } | { ok: false; message: string }
+> {
+  try {
+    const res = await apiPost<{ penalised?: boolean; message?: string }>(
+      `driver/orders/${orderId}/release`,
+      {},
+    );
+    return {
+      ok: true,
+      penalised: Boolean(res?.penalised),
+      message: res?.message ?? 'Заказ передан в поиск.',
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Ошибка соединения';
+    driverLogger.error('Не удалось отказаться от заказа', {
+      stack: message,
+      screen: 'orders.api',
+      action: 'release',
+      extra: { orderId },
+    });
+    return { ok: false, message };
+  }
+}
+
 /** Принять заказ с указанием времени подачи в минутах */
 export async function acceptOrder(
   orderId: string,

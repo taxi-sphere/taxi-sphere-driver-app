@@ -15,7 +15,7 @@
  */
 
 import React, { useEffect } from 'react';
-import { Pressable, type ViewStyle, type StyleProp } from 'react-native';
+import { Pressable, StyleSheet, type ViewStyle, type StyleProp } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -163,7 +163,22 @@ export function ScalePress({
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
   return (
-    <Animated.View style={animStyle}>
+    /**
+     * СТИЛЬ ИДЁТ НА ВНЕШНЮЮ ВЬЮХУ, А НЕ НА `Pressable`.
+     *
+     * Флекс-ребёнком родительской строки является именно эта обёртка. Когда
+     * `style` вешали на `Pressable` внутри, раскладочные свойства применялись
+     * на уровень глубже, чем надо, и схлопывались: `flex: 1` внутри
+     * контейнера без собственной высоты — это `flexBasis: 0` и нулевая
+     * высота. В 1.5.26 так пропал переключатель «Текущий / Встречный» на
+     * экране заказа: две цветные полоски по 16 точек, текст срезан целиком,
+     * ширины неравные (замерено: 115 и 138 вместо 160). Водитель видел
+     * элемент, но не мог прочитать, что это.
+     *
+     * `Pressable` внутри растянут на всю обёртку — иначе нажималась бы
+     * только область под содержимым.
+     */
+    <Animated.View style={[style, animStyle]}>
       <Pressable
         onPress={onPress}
         onPressIn={() => {
@@ -175,13 +190,17 @@ export function ScalePress({
         disabled={disabled}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
-        style={style}
+        style={styles.fill}
       >
         {children}
       </Pressable>
     </Animated.View>
   );
 }
+
+const styles = StyleSheet.create({
+  fill: { flexGrow: 1 },
+});
 
 /**
  * Элемент списка с каскадной задержкой появления.

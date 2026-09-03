@@ -21,7 +21,9 @@ import {
   formatPhoneInput,
   isPhoneComplete,
   splitAddressEntrance,
+  shortenStreetType,
   stripSharedCityPrefix,
+  usableChangelog,
   pickupEtaStep,
   formatScheduledAt,
   pickupEtaPresets,
@@ -266,5 +268,46 @@ describe('formatScheduledAt', () => {
     expect(formatScheduledAt(null, now)).toBe('—');
     expect(formatScheduledAt(undefined, now)).toBe('—');
     expect(formatScheduledAt('не дата', now)).toBe('—');
+  });
+});
+
+describe('shortenStreetType — длинный адрес в две строки заголовка', () => {
+  it.each([
+    ['проспект Красноярский рабочий, 150', 'пр-т Красноярский рабочий, 150'],
+    ['улица Ленина, д. 1', 'ул. Ленина, д. 1'],
+    ['Набережная, д. 76', 'наб., д. 76'],
+    ['переулок Тихий, 3', 'пер. Тихий, 3'],
+    ['микрорайон Северный, 12', 'мкр. Северный, 12'],
+  ])('%s → %s', (input, expected) => {
+    expect(shortenStreetType(input)).toBe(expected);
+  });
+
+  it('знаки препинания после типа улицы сохраняются', () => {
+    expect(shortenStreetType('улица, Ленина')).toBe('ул., Ленина');
+  });
+
+  it('обычные слова не трогаем', () => {
+    expect(shortenStreetType('Бортникова, д. 48')).toBe('Бортникова, д. 48');
+  });
+});
+
+describe('usableChangelog — что показать в окне обновления', () => {
+  it('автотекст GitHub не показываем', () => {
+    expect(
+      usableChangelog('**Full Changelog**: https://github.com/x/y/compare/a...b'),
+    ).toBeNull();
+  });
+
+  it('голая ссылка — тоже нет', () => {
+    expect(usableChangelog('https://github.com/x/y/releases/tag/v1')).toBeNull();
+  });
+
+  it('человеческий текст показываем', () => {
+    expect(usableChangelog('Починили шторку заказа.')).toBe('Починили шторку заказа.');
+  });
+
+  it('пусто — нечего показывать', () => {
+    expect(usableChangelog('')).toBeNull();
+    expect(usableChangelog(null)).toBeNull();
   });
 });

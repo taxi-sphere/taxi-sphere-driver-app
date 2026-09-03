@@ -224,7 +224,12 @@ jobs:
           tag_name: ${{ steps.parse.outputs.tag }}
           name: ${{ steps.parse.outputs.tag }}
           prerelease: ${{ steps.parse.outputs.channel == 'beta' }}
-          generate_release_notes: true
+          # Тело релиза адресовано разработчику, а не водителю.
+          # generate_release_notes писал сюда «**Full Changelog**: <ссылка>»,
+          # админка копировала это в поле «Что нового», и водитель на вопрос
+          # «что изменилось» получал ссылку на GitHub. Текст для водителя
+          # пишется руками при публикации сборки в канал.
+          generate_release_notes: false
           files: android/app/build/outputs/apk/release/app-release.apk
 
       # ── 11. Публикацию водителям делает АДМИНКА, а не сборка ────────────────

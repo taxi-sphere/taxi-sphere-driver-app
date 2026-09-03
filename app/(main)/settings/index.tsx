@@ -37,6 +37,7 @@ import { useSettingsStore } from '@/stores/settings.store';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
 import { useUpdateRequestStore } from '@/stores/update-request.store';
 import { haptics } from '@/lib/haptics';
+import { usableChangelog } from '@/lib/utils';
 import {
   icon as iconTokens,
   radius,
@@ -130,8 +131,10 @@ export default function SettingsScreen() {
         `Текущая версия: ${currentVersion}`,
         `Новая версия: ${latest.latestVersion}`,
         sizeMb ? `Размер: ~${sizeMb} МБ` : null,
-        latest.changelog?.trim()
-          ? `\nЧто нового:\n${latest.changelog.trim()}`
+        // Ссылку на GitHub вместо описания водителю не показываем — см.
+        // usableChangelog.
+        usableChangelog(latest.changelog)
+          ? `\nЧто нового:\n${usableChangelog(latest.changelog)}`
           : null,
       ].filter(Boolean);
       const ok = await confirm({

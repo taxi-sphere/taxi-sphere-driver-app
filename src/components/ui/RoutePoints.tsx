@@ -29,6 +29,11 @@ export interface RoutePoint {
   kind: 'pickup' | 'stop' | 'dropoff';
   /** Кнопка «Ехать» или что-то ещё, прижатое к правому краю строки. */
   action?: ReactNode;
+  /**
+   * Не адрес, а объяснение его отсутствия («Адрес назначения уточнит
+   * клиент»). Пишется приглушённо, чтобы не читалось как настоящая точка.
+   */
+  muted?: boolean;
 }
 
 interface RoutePointsProps {
@@ -99,6 +104,7 @@ export function RoutePoints({
               <View style={{ flex: 1 }}>
                 <AppText
                   variant={emphasized ? 'subheading' : 'body'}
+                  tone={point.muted ? 'muted' : 'primary'}
                   numberOfLines={compact ? 1 : undefined}
                 >
                   {point.address}
