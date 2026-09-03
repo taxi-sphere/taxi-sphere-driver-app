@@ -10,6 +10,7 @@
  */
 
 import ky, { HTTPError, type KyInstance, type Options } from 'ky';
+import Constants from 'expo-constants';
 import { getApiBase, API_TIMEOUT_MS, API_RETRY_COUNT } from '@/lib/constants';
 import { useAuthStore } from '@/stores/auth.store';
 import { driverLogger } from '@/services/logger.service';
@@ -61,6 +62,9 @@ async function refreshTokens(): Promise<boolean> {
 /*  API-клиент                                                                 */
 /* -------------------------------------------------------------------------- */
 
+/** Версия сборки — уходит в заголовке каждого запроса, см. hooks ниже. */
+const APP_VERSION = (Constants.expoConfig?.version as string | undefined) ?? '';
+
 export const api: KyInstance = ky.create({
   // prefixUrl НЕ задаём: он вычисляется один раз при импорте модуля,
   // когда Zustand persist ещё не восстановил serverUrl из AsyncStorage.
@@ -78,6 +82,22 @@ export const api: KyInstance = ky.create({
         if (accessToken) {
           request.headers.set('Authorization', `Bearer ${accessToken}`);
         }
+        /**
+         * Версия приложения — В КАЖДОМ запросе (1.5.31).
+         *
+         * ЗАЧЕМ. Сервер обновляется независимо от приложения, и у водителей
+         * подолгу живут старые сборки. Без версии сервер вынужден отдавать
+         * одно и то же всем, и любое улучшение вида данных превращается в
+         * поломку для тех, кто ещё не обновился. Первый такой случай —
+         * населённый пункт: с v1.99.81 сервер убирает его из адреса, потому
+         * что показывает отдельной подписью, а подпись умеют рисовать
+         * только сборки с 1.5.26. Старой сборке город надо оставить в
+         * адресе, иначе межгородний заказ выглядит как соседняя улица.
+         *
+         * Заголовок, а не поле в теле: он нужен и в GET-запросах, где тела
+         * нет вовсе.
+         */
+        if (APP_VERSION) request.headers.set('X-App-Version', APP_VERSION);
       },
     ],
     afterResponse: [
