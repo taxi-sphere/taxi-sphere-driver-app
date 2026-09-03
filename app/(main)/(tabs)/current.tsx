@@ -59,10 +59,7 @@ import {
 } from 'react';
 import {
   ActivityIndicator,
-  Alert,
-  Dimensions,
   Linking,
-  Pressable,
   ScrollView,
   StyleSheet,
   View,
@@ -106,7 +103,9 @@ import {
   ScalePress,
   Screen,
   Surface,
+  useConfirm,
   useDialog,
+  useNotify,
   type RoutePoint,
 } from '@/components/ui';
 import { OrderProgress } from '@/components/order/OrderProgress';
@@ -119,35 +118,49 @@ import type { CurrentOrder, OrderStatus } from '@/types/order';
  */
 const mapAvailable = isEmbeddedMapAvailable();
 
-const SCREEN_HEIGHT = Dimensions.get('window').height;
 /**
  * Свёрнутая шторка: полоса этапов и текущая цель с кнопками.
  *
  * Было 300 — почти половина экрана под сведения, которые водитель уже
- * прочитал. Стало 170: адрес в две строки, обе кнопки (звонок и навигатор)
- * и полоса этапов помещаются, а карта получает вдвое больше места. Всё
- * остальное — цена, маршрут, комментарий — потягиванием вверх, и только
- * когда понадобилось.
+ * прочитал. Стало 215: помещаются полоса этапов, адрес В ДВЕ СТРОКИ, чип
+ * подъезда и обе кнопки (звонок и навигатор), а карта получает вдвое больше
+ * места. Всё остальное — цена, маршрут, комментарий — потягиванием вверх.
+ *
+ * Замерено на эмуляторе 360dp (1.5.23): адрес в ОДНУ строку вместе с чипом
+ * подъезда занимает 159, при 170 он влезал впритык. Длинные адреса
+ * («Красноярск, ул. Академика Киренского, д. 32, корп. 1») переносятся на
+ * вторую строку — это ещё ~34, и чип подъезда уезжал под обрез. Подъезд
+ * терять нельзя: водитель без него звонит клиенту и спрашивает.
  */
-const SHEET_COLLAPSED = 170;
-/** Развёрнутая — но не во весь экран: карта должна оставаться видимой. */
-const SHEET_EXPANDED = Math.min(Math.max(SCREEN_HEIGHT * 0.66, 420), SCREEN_HEIGHT - 160);
+const SHEET_COLLAPSED = 215;
+/**
+ * Сколько карты обязано остаться видно над развёрнутой шторкой.
+ *
+ * Меньше — и водитель теряет из виду то, ради чего карта на весь экран.
+ */
+const MAP_MIN_VISIBLE = 96;
+
+/**
+ * Высота развёрнутой шторки.
+ *
+ * СЧИТАЕТСЯ ОТ ИЗМЕРЕННОГО КОНТЕЙНЕРА, А НЕ ОТ ОКНА. Раньше здесь стояло
+ * `Dimensions.get('window').height - 160`, но шторка живёт не в окне: над
+ * ней шапка со статусом и полоса с балансом, под ней — вкладки. Окно выше
+ * контейнера на всю эту обвязку, и запас в 160 её не покрывал: верх шторки
+ * заезжал под шапку, а вместе с ним исчезали полоска-хват и точки полосы
+ * этапов — оставались одни подписи «Подача / Ожидание / Поездка / Готово».
+ * Воспроизведено на эмуляторе 360dp (1.5.23).
+ *
+ * `containerHeight = 0` — разметка ещё не посчиталась; отдаём свёрнутую
+ * высоту, чтобы на первом кадре шторка не прыгала.
+ */
+function sheetExpandedHeight(containerHeight: number, actionBarHeight: number): number {
+  if (containerHeight <= 0) return SHEET_COLLAPSED;
+  const available = containerHeight - actionBarHeight - MAP_MIN_VISIBLE;
+  return Math.max(SHEET_COLLAPSED, Math.min(containerHeight * 0.66, available));
+}
 /** Панель главного действия под шторкой. */
 const ACTION_BAR_HEIGHT = touch.primary + spacing.lg * 2;
-/**
- * Панель со ВТОРОЙ строкой — кнопкой «Встречный».
- *
- * Высота считается отдельно, потому что под панель отводят место и карта
- * (`bottomInset`), и шторка (`bottomOffset`).
- *
- * 1.5.23: строка резервируется ровно тогда, когда кнопка показывается. До
- * этого рядом жила «Беру заказы», строка существовала всегда, и высоту
- * приходилось брать по наличию главного действия — иначе у водителя со
- * встречным заказом переключатель уезжал за край экрана (1.5.19).
- */
-const ACTION_BAR_HEIGHT_TWO_ROWS =
-  ACTION_BAR_HEIGHT + touch.min + spacing.sm;
-
 /** Что водитель делает на каждом этапе. */
 const ACTION_BY_STATUS: Partial<
   Record<OrderStatus, { label: string; confirmTitle: string; confirmBody: string; confirm: string }>
@@ -193,6 +206,14 @@ export default function CurrentOrderScreen() {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
   const askDialog = useDialog();
+
+  /**
+   * Высота области под шторку. Меряем, а не берём из `Dimensions`: окно
+   * выше этого контейнера на шапку, полосу баланса и вкладки.
+   */
+  const [containerHeight, setContainerHeight] = useState(0);
+  const confirm = useConfirm();
+  const notify = useNotify();
 
   // Таймер ожидания клиента (driver_arrived)
   const [waitingSeconds, setWaitingSeconds] = useState(0);
@@ -324,10 +345,10 @@ export default function CurrentOrderScreen() {
           stack: e instanceof Error ? e.stack : null,
         });
         haptics.reject();
-        Alert.alert('Ошибка', 'Не удалось выполнить действие. Логи отправлены.');
+        void notify('Не удалось выполнить действие', 'Логи отправлены — диспетчер увидит ошибку.');
       }
     },
-    [],
+    [notify],
   );
 
   /** Одно подтверждение на все три действия — текст берётся по статусу. */
@@ -371,11 +392,14 @@ export default function CurrentOrderScreen() {
     };
 
     haptics.tap();
-    Alert.alert(config.confirmTitle, config.confirmBody, [
-      { text: 'Отмена', style: 'cancel' },
-      { text: config.confirm, onPress: run },
-    ]);
-  }, [order, arrive, start, complete, runOrderAction]);
+    void confirm({
+      title: config.confirmTitle,
+      message: config.confirmBody,
+      confirmLabel: config.confirm,
+    }).then((ok) => {
+      if (ok) run();
+    });
+  }, [order, arrive, start, complete, runOrderAction, confirm]);
 
   const call = (phone: string) => {
     haptics.tap();
@@ -466,29 +490,26 @@ export default function CurrentOrderScreen() {
   // ─── Активный заказ ──────────────────────────────────────────────────
 
   const target = pickTarget(order, shortAddresses);
-  /**
-   * Встречный заказ (v1.5.19). Кнопка видна, пока встречного ещё нет, и
-   * работает только когда клиент уже в машине: правило службы —
-   * второй заказ берут ТОЛЬКО с пассажиром, иначе первый клиент ждёт
-   * машину, которая уехала за вторым. Тот же расчёт делает сервер
-   * (`checkDriverCanTakeOrder`), здесь он лишь объясняет заранее.
-   */
-  const hasCounterOrder = (orders?.length ?? 0) > 1;
-  const canTakeCounter = order?.status === 'in_progress';
-
   const action = ACTION_BY_STATUS[order.status];
-  const showCounterButton = Boolean(action) && !hasCounterOrder;
-  // 1.5.23: во второй строке осталась одна кнопка «Встречный», поэтому
-  // место под неё резервируется ровно тогда, когда она показывается. Пока
-  // рядом жила «Беру заказы», строка существовала всегда, и высоту брали по
-  // наличию главной кнопки.
-  const actionBarHeight = showCounterButton ? ACTION_BAR_HEIGHT_TWO_ROWS : ACTION_BAR_HEIGHT;
+  /**
+   * 1.5.24: второй строки кнопок больше нет.
+   *
+   * Кнопка «Встречный» только переключала на вкладку «Заказы» — то есть
+   * дублировала вкладку, которая и так внизу экрана. При этом держала целую
+   * строку и почти всю смену была погашенной подписью «Встречный — после
+   * посадки». Взять встречный водитель идёт туда же, куда за любым другим
+   * заказом: в «Заказы».
+   */
+  const actionBarHeight = ACTION_BAR_HEIGHT;
   const canShowMap = mapAvailable && order.pickupLat != null && order.pickupLng != null;
 
   const routePoints: RoutePoint[] = buildRoutePoints(order, shortAddresses, openNavigator);
 
   return (
-    <View style={styles.root}>
+    <View
+      style={styles.root}
+      onLayout={(e) => setContainerHeight(e.nativeEvent.layout.height)}
+    >
       {canShowMap ? (
         <MapErrorBoundary orderId={order.id}>
           <OrderMap order={order} fill bottomInset={SHEET_COLLAPSED + actionBarHeight} />
@@ -520,7 +541,7 @@ export default function CurrentOrderScreen() {
 
       <BottomSheet
         collapsedHeight={SHEET_COLLAPSED}
-        expandedHeight={SHEET_EXPANDED}
+        expandedHeight={sheetExpandedHeight(containerHeight, actionBarHeight)}
         bottomOffset={actionBarHeight}
         header={
           <View style={styles.sheetHeader}>
@@ -682,49 +703,6 @@ export default function CurrentOrderScreen() {
           >
             {action.label}
           </Button>
-
-          {/* Встречный заказ. Кнопка на месте всегда — водитель должен
-              видеть, что такая возможность есть, и почему она сейчас
-              недоступна. Молча спрятанная кнопка выглядит как её
-              отсутствие.
-
-              1.5.23: кнопка «Беру заказы» отсюда убрана. Она делала ровно
-              то же, что пилюля статуса в шапке, — говорила системе, брать
-              ли встречные, — и водитель имел два органа управления на одно
-              решение. Осталась пилюля: она на виду всегда и на всех
-              экранах, а не только здесь. */}
-          <View style={styles.secondaryRow}>
-          {showCounterButton && (
-            <Pressable
-              onPress={() => {
-                if (!canTakeCounter) return;
-                haptics.tap();
-                // replace, а не push: между вкладками в приложении переходят
-                // так везде (см. orders.tsx → «К текущему заказу»), иначе
-                // копится стек и системная «назад» ведёт не туда.
-                router.replace('/(main)/(tabs)/orders');
-              }}
-              disabled={!canTakeCounter}
-              style={({ pressed }: { pressed: boolean }) => [
-                styles.counterButton,
-                { borderColor: colors.border },
-                pressed && canTakeCounter && { backgroundColor: colors.surface },
-                !canTakeCounter && { opacity: 0.5 },
-              ]}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: !canTakeCounter }}
-              accessibilityLabel={
-                canTakeCounter
-                  ? 'Встречный заказ'
-                  : 'Встречный заказ доступен после посадки клиента'
-              }
-            >
-              <AppText variant="label" tone={canTakeCounter ? 'primary' : 'muted'}>
-                {canTakeCounter ? 'Встречный' : 'Встречный — после посадки'}
-              </AppText>
-            </Pressable>
-          )}
-          </View>
         </View>
       )}
     </View>
@@ -1010,22 +988,6 @@ const createStyles = (t: Theme) =>
       paddingVertical: spacing.lg,
       borderTopWidth: 1,
       borderTopColor: t.colors.border,
-    },
-
-    secondaryRow: {
-      flexDirection: 'row',
-      gap: spacing.sm,
-      marginTop: spacing.sm,
-    },
-
-    counterButton: {
-      flex: 1,
-      marginTop: 0,
-      height: touch.min,
-      borderRadius: radius.md,
-      borderWidth: 1,
-      alignItems: 'center',
-      justifyContent: 'center',
     },
 
     completed: { alignItems: 'center', gap: spacing.sm, width: '100%', maxWidth: 380 },

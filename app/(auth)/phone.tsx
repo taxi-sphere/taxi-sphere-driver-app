@@ -35,8 +35,7 @@ import {
   KeyboardAvoidingView,
   ScrollView,
   Platform,
-  Alert,
-} from 'react-native';
+  } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useLogin } from '@/hooks/useAuth';
@@ -52,9 +51,11 @@ import {
   useThemedStyles,
   type Theme,
 } from '@/lib/theme';
-import { AppText, Button, FadeIn, Gradient, Screen, Surface } from '@/components/ui';
+import { AppText, Button, FadeIn, Gradient, Screen, Surface , useNotify } from '@/components/ui';
+
 
 export default function LoginScreen() {
+  const notify = useNotify();
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { serverUrl, setServerUrl, lastPhone } = useSettingsStore();
@@ -67,14 +68,14 @@ export default function LoginScreen() {
 
   const handleLogin = () => {
     if (!isPhoneComplete(phone)) {
-      Alert.alert(
+      void notify(
         'Проверьте номер',
         'Нужны все 10 цифр номера после +7. Например: +7 923 018 91 96',
       );
       return;
     }
     if (!password.trim()) {
-      Alert.alert('Ошибка', 'Введите пароль');
+      void notify('Введите пароль', 'Пароль выдаёт администратор службы.');
       return;
     }
 
@@ -84,7 +85,7 @@ export default function LoginScreen() {
         onError: (err) => {
           const message =
             err instanceof Error ? err.message : 'Неверный телефон или пароль';
-          Alert.alert('Ошибка входа', message);
+          void notify('Не удалось войти', message);
         },
       },
     );
@@ -224,7 +225,7 @@ export default function LoginScreen() {
                   onPress={() => {
                     const url = serverInput.trim().replace(/\/$/, '');
                     setServerUrl(url);
-                    Alert.alert('Сохранено', url || 'Автоопределение');
+                    void notify('Сохранено', url || 'Автоопределение');
                   }}
                   variant="secondary"
                   fullWidth

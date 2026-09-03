@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useCallback, useState } from 'react';
-import { View, TextInput, StyleSheet, Alert } from 'react-native';
+import { View, TextInput, StyleSheet } from 'react-native';
 import { Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -19,7 +19,8 @@ import { useSettingsStore } from '@/stores/settings.store';
 import { useAuthStore } from '@/stores/auth.store';
 import { getApiUrl } from '@/lib/constants';
 import { icon, radius, spacing, text, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
-import { AppText, Button, Screen } from '@/components/ui';
+import { AppText, Button, Screen , useConfirm, useNotify } from '@/components/ui';
+
 
 export default function MainLayout() {
   const isServerReachable = useConnectionStore((s) => s.isServerReachable);
@@ -133,20 +134,23 @@ function NoConnectionScreen({ onRetry, checking }: { onRetry: () => void; checki
   const appVersion = Constants.expoConfig?.version ?? '?';
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const confirm = useConfirm();
+  const notify = useNotify();
 
   const handleSave = () => {
     const url = serverInput.trim().replace(/\/$/, '');
     setServerUrl(url);
-    Alert.alert('Сохранено', 'Адрес сервера обновлён. Повторяю подключение...', [
-      { text: 'OK', onPress: onRetry },
-    ]);
+    void notify('Сохранено', 'Адрес сервера обновлён. Повторяю подключение…').then(onRetry);
   };
 
-  const handleLogout = () => {
-    Alert.alert('Выход', 'Выйти из аккаунта?', [
-      { text: 'Отмена', style: 'cancel' },
-      { text: 'Выйти', style: 'destructive', onPress: () => void logout() },
-    ]);
+  const handleLogout = async () => {
+    const ok = await confirm({
+      title: 'Выйти из аккаунта?',
+      message: 'Придётся войти заново по номеру телефона и паролю.',
+      confirmLabel: 'Выйти',
+      variant: 'danger',
+    });
+    if (ok) void logout();
   };
 
   return (
@@ -173,7 +177,7 @@ function NoConnectionScreen({ onRetry, checking }: { onRetry: () => void; checki
           Повторить
         </Button>
 
-        <Button onPress={handleLogout} variant="ghost" icon="log-out-outline" style={styles.logout}>
+        <Button onPress={() => void handleLogout()} variant="ghost" icon="log-out-outline" style={styles.logout}>
           Выйти из аккаунта
         </Button>
 

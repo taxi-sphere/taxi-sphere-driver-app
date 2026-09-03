@@ -17,7 +17,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { usePayoutData, useCreatePayout } from '@/hooks/usePayout';
@@ -41,8 +41,9 @@ import {
   ScalePress,
   Screen,
   Surface,
-} from '@/components/ui';
+ useConfirm, useNotify } from '@/components/ui';
 import type { PayoutMethod, PayoutRequest } from '@/api/payout.api';
+
 
 /** Как называются статусы заявки на языке водителя. */
 const STATUS_VIEW: Record<string, { label: string; tone: 'warning' | 'success' | 'danger' | 'neutral' }> = {
@@ -54,6 +55,8 @@ const STATUS_VIEW: Record<string, { label: string; tone: 'warning' | 'success' |
 };
 
 export default function PayoutScreen() {
+  const confirm = useConfirm();
+  const notify = useNotify();
   const router = useRouter();
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -80,37 +83,30 @@ export default function PayoutScreen() {
 
   const problem = validate({ amount, balance, method, requisites });
 
-  const submit = () => {
+  const submit = async () => {
     if (!method || problem) return;
     haptics.tap();
-    Alert.alert(
-      'Вывести деньги?',
-      `Списывается ${formatCurrency(amount)}, на руки ${formatCurrency(net)}.`,
-      [
-        { text: 'Отмена', style: 'cancel' },
-        {
-          text: 'Вывести',
-          onPress: () =>
-            create.mutate(
-              { payoutMethodId: method.id, amount, requisites: requisites.trim() },
-              {
-                onSuccess: () => {
-                  haptics.success();
-                  setAmountText('');
-                  setRequisites('');
-                  Alert.alert('Заявка создана', 'Деньги придут после подтверждения диспетчером.');
-                },
-                onError: (e: unknown) => {
-                  haptics.reject();
-                  Alert.alert(
-                    'Не получилось',
-                    e instanceof Error ? e.message : 'Попробуйте позже',
-                  );
-                },
-              },
-            ),
+    const ok = await confirm({
+      title: 'Вывести деньги?',
+      message: `Списывается ${formatCurrency(amount)}, на руки ${formatCurrency(net)}.`,
+      confirmLabel: 'Вывести',
+    });
+    if (!ok) return;
+
+    create.mutate(
+      { payoutMethodId: method.id, amount, requisites: requisites.trim() },
+      {
+        onSuccess: () => {
+          haptics.success();
+          setAmountText('');
+          setRequisites('');
+          void notify('Заявка создана', 'Деньги придут после подтверждения диспетчером.');
         },
-      ],
+        onError: (e: unknown) => {
+          haptics.reject();
+          void notify('Не получилось', e instanceof Error ? e.message : 'Попробуйте позже');
+        },
+      },
     );
   };
 
@@ -250,7 +246,7 @@ export default function PayoutScreen() {
           )}
 
           <Button
-            onPress={submit}
+            onPress={() => void submit()}
             size="lg"
             fullWidth
             disabled={!!problem || !method}

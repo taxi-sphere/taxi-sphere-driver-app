@@ -55,6 +55,15 @@ export const availableOrderSchema = z.object({
   options: z.array(orderOptionSchema).default([]),
   /** «Горящий» заказ — сервер v1.99.69. `default(false)` для старых серверов. */
   isHot: z.boolean().default(false),
+  /**
+   * Состояние подтверждения предзаказа (сервер v1.99.76).
+   *
+   * Приходит только в `/orders/scheduled`; в списке свободных заказов их не
+   * бывает, поэтому поля необязательные. `confirmationRequestedAt` без
+   * `confirmedAt` означает, что сервер ждёт ответа водителя прямо сейчас.
+   */
+  confirmationRequestedAt: z.string().nullish().default(null),
+  confirmedAt: z.string().nullish().default(null),
 });
 
 /**

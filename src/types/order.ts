@@ -68,6 +68,12 @@ export interface AvailableOrder {
    * взять их нельзя.
    */
   isHot: boolean;
+  /**
+   * Сервер попросил подтвердить предзаказ и ждёт ответа (v1.99.76).
+   * Заполнено без `confirmedAt` — значит, ответа ещё нет.
+   */
+  confirmationRequestedAt?: string | null;
+  confirmedAt?: string | null;
 }
 
 /** Текущий активный заказ (GET /driver/orders/current) */

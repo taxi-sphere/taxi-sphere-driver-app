@@ -3,10 +3,12 @@
  * @description:
  *   Список заказов: свободные и предзаказы — двумя режимами одного экрана.
  *
- *   ЧТО ИЗМЕНИЛОСЬ В v1.5.17.
- *   • Предзаказы переехали сюда из отдельной нижней вкладки, где висела
- *     заглушка «Здесь будут отображаться заказы». Вкладка занимала одно из
- *     четырёх мест главной навигации и не делала ничего.
+ *   ТОЛЬКО ЧУЖИЕ ЗАКАЗЫ. С v1.5.24 здесь ровно один список — свободные,
+ *   которые можно взять. Предзаказы уехали в свою вкладку: в v1.5.17 их
+ *   свели сюда вторым режимом переключателя, и в одном контроле оказались
+ *   две разные вещи — «что можно взять» и «что я уже взял». Нажатие на свой
+ *   предзаказ из-за этого открывало окно «Принять заказ?» и упиралось в
+ *   отказ сервера.
  *   • Пустой список теперь объясняет ПОЧЕМУ он пуст. Сервер с v1.99.58
  *     присылает `meta.blockedMessage` («Водитель едет на подачу…»), но
  *     приложение его не читало — и водитель на подаче видел ровно то же
@@ -27,7 +29,6 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAvailableOrders } from '@/hooks/useAvailableOrders';
 import { activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
-import { useScheduledOrders } from '@/hooks/useScheduledOrders';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useConnectionStore } from '@/stores/connection.store';
 import { socketService } from '@/services/socket.service';
@@ -40,7 +41,6 @@ import {
   EmptyState,
   OrderCardSkeleton,
   Screen,
-  Segmented,
   StaggerItem,
   Surface,
   useNotify,
@@ -54,8 +54,6 @@ const DEFAULT_ETA_MIN = 5;
 /** Через сколько секунд пробовать переподключиться после обрыва. */
 const RETRY_INTERVAL = 15;
 
-type Tab = 'available' | 'scheduled';
-
 export default function OrdersScreen() {
   const router = useRouter();
   const { colors } = useTheme();
@@ -63,10 +61,7 @@ export default function OrdersScreen() {
   const queryClient = useQueryClient();
   const notify = useNotify();
 
-  const [tab, setTab] = useState<Tab>('available');
-
   const { data: orders, isLoading, refetch, meta, error } = useAvailableOrders();
-  const scheduled = useScheduledOrders();
   const { accept } = useOrderActions();
   const socketStatus = useConnectionStore((s) => s.socketStatus);
   const isDisconnected = socketStatus !== 'connected';
@@ -176,11 +171,10 @@ export default function OrdersScreen() {
     setPendingOrder(null);
   }, [accept.isPending]);
 
-  const isScheduledTab = tab === 'scheduled';
-  const list = isScheduledTab ? (scheduled.data ?? []) : (orders ?? []);
-  const listLoading = isScheduledTab ? scheduled.isLoading : isLoading;
-  const listError = isScheduledTab ? scheduled.error : error;
-  const reload = isScheduledTab ? scheduled.refetch : refetch;
+  const list = orders ?? [];
+  const listLoading = isLoading;
+  const listError = error;
+  const reload = refetch;
 
   /**
    * Нажатие на карточку.
@@ -199,28 +193,17 @@ export default function OrdersScreen() {
    */
   const handleCardPress = useCallback(
     (order: AvailableOrder) => {
-      if (isScheduledTab || blockedMessage) {
+      if (blockedMessage) {
         router.push(`/(main)/order/${order.id}` as never);
         return;
       }
       setPendingOrder(order);
     },
-    [isScheduledTab, blockedMessage, router],
+    [blockedMessage, router],
   );
 
   return (
     <Screen>
-      <View style={styles.tabs}>
-        <Segmented<Tab>
-          value={tab}
-          onChange={setTab}
-          options={[
-            { value: 'available', label: 'Свободные', count: orders?.length },
-            { value: 'scheduled', label: 'Предзаказы', count: scheduled.data?.length },
-          ]}
-        />
-      </View>
-
       {/* Нет связи — единственное состояние, которое перекрывает весь экран:
           без сокета список всё равно не обновляется. */}
       {isDisconnected ? (
@@ -235,7 +218,7 @@ export default function OrdersScreen() {
         <>
           {/* Именно `=== false`: поле необязательное, и «не пришло» —
               это не «GPS выключен». */}
-          {!isScheduledTab && meta?.hasGps === false && (
+          {meta?.hasGps === false && (
             <Banner
               tone={meta.showOrdersWithoutGps ? 'warning' : 'danger'}
               icon="navigate-circle-outline"
@@ -273,7 +256,7 @@ export default function OrdersScreen() {
                 // (v1.99.69), а принять можно не всегда. Без этой строки
                 // выглядело бы как поломка: карточки есть, нажатие ничего
                 // не делает.
-                !isScheduledTab && blockedMessage && list.length > 0 ? (
+                blockedMessage && list.length > 0 ? (
                   <Surface
                     level={1}
                     style={[styles.blockedNote, { borderColor: colors.warning }]}
@@ -289,7 +272,7 @@ export default function OrdersScreen() {
                   <OrderCard
                     order={item}
                     onPress={handleCardPress}
-                    scheduled={isScheduledTab}
+                    scheduled={false}
                   />
                 </StaggerItem>
               )}
@@ -302,18 +285,10 @@ export default function OrdersScreen() {
                 />
               }
               ListEmptyComponent={
-                isScheduledTab ? (
-                  <EmptyState
-                    icon="time-outline"
-                    title="Предзаказов нет"
-                    description="Заказы, назначенные вам на определённое время, появятся здесь"
-                  />
-                ) : (
-                  <AvailableEmpty
-                    blockedMessage={blockedMessage}
-                    onGoToOrder={() => router.replace('/(main)/(tabs)/current')}
-                  />
-                )
+                <AvailableEmpty
+                  blockedMessage={blockedMessage}
+                  onGoToOrder={() => router.replace('/(main)/(tabs)/current')}
+                />
               }
             />
           )}

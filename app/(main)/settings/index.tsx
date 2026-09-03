@@ -29,7 +29,6 @@ import {
   TextInput,
   StyleSheet,
   ScrollView,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -48,7 +47,8 @@ import {
   useThemedStyles,
   type Theme,
 } from '@/lib/theme';
-import { AppText, Button, Divider, Screen, Surface } from '@/components/ui';
+import { AppText, Button, Divider, Screen, Surface , useConfirm, useNotify } from '@/components/ui';
+
 
 type NavigatorApp = 'yandex' | '2gis' | 'google';
 
@@ -66,6 +66,8 @@ const THEME_MODES = [
 ] as const;
 
 export default function SettingsScreen() {
+  const confirm = useConfirm();
+  const notify = useNotify();
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
   const {
@@ -90,28 +92,24 @@ export default function SettingsScreen() {
 
   const [serverInput, setServerInput] = useState(serverUrl);
 
-  const handleBetaToggle = (next: boolean) => {
+  const handleBetaToggle = async (next: boolean) => {
     if (next) {
       // Explicit opt-in — предупреждаем о риске
-      Alert.alert(
-        'Включить beta-канал?',
-        'Beta-версии могут содержать нестабильные функции и баги. ' +
+      const ok = await confirm({
+        title: 'Включить beta-канал?',
+        message:
+          'Beta-версии могут содержать нестабильные функции и баги. ' +
           'Обычно они выпускаются на несколько дней раньше основных релизов ' +
           'для проверки. Если что-то сломается — выключите этот переключатель ' +
           'и переустановите основную (production) версию через админку.',
-        [
-          { text: 'Отмена', style: 'cancel' },
-          {
-            text: 'Включить',
-            style: 'destructive',
-            onPress: () => {
-              setBetaChannel(true);
-              // Немедленно перезапросить последнюю версию в новом канале
-              void refresh();
-            },
-          },
-        ],
-      );
+        confirmLabel: 'Включить',
+        variant: 'danger',
+      });
+      if (ok) {
+        setBetaChannel(true);
+        // Немедленно перезапросить последнюю версию в новом канале
+        void refresh();
+      }
     } else {
       setBetaChannel(false);
       void refresh();
@@ -136,30 +134,27 @@ export default function SettingsScreen() {
           ? `\nЧто нового:\n${latest.changelog.trim()}`
           : null,
       ].filter(Boolean);
-      Alert.alert('Доступно обновление', parts.join('\n'), [
-        { text: 'Отмена', style: 'cancel' },
-        {
-          text: 'Обновить',
-          style: 'default',
-          onPress: () => {
-            // v1.5.11: делегируем скачивание AppUpdateNotifier'у — он
-            // смонтирован в корневом layout и показывает модалку с
-            // прогрессом. Раньше здесь вызывался downloadAndInstallApk
-            // напрямую, без колбэка прогресса: водитель жал «Обновить», и
-            // 100 МБ качались вслепую, без единого индикатора.
-            requestUpdate(latest);
-          },
-        },
-      ]);
+      const ok = await confirm({
+        title: 'Доступно обновление',
+        message: parts.join('\n'),
+        confirmLabel: 'Обновить',
+      });
+      if (ok) {
+        // v1.5.11: делегируем скачивание AppUpdateNotifier'у — он смонтирован
+        // в корневом layout и показывает модалку с прогрессом. Раньше здесь
+        // вызывался downloadAndInstallApk напрямую, без колбэка прогресса:
+        // водитель жал «Обновить», и 100 МБ качались вслепую.
+        requestUpdate(latest);
+      }
     } else {
-      Alert.alert('Обновлений нет', 'У вас последняя версия', [{ text: 'OK' }]);
+      await notify('Обновлений нет', 'У вас последняя версия.');
     }
   };
 
   const handleSaveServer = () => {
     const url = serverInput.trim().replace(/\/$/, '');
     setServerUrl(url);
-    Alert.alert('Сохранено', url ? `Сервер: ${url}` : 'Используется автоопределение', [{ text: 'OK' }]);
+    void notify('Сохранено', url ? `Сервер: ${url}` : 'Используется автоопределение');
   };
 
   return (

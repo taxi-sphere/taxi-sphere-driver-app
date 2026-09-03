@@ -17,15 +17,16 @@
  * @created: 2026-09-02 (1.5.19)
  */
 
-import { Alert } from 'react-native';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { setAcceptingOrders } from '@/api/driver.api';
 import { useDriverProfile } from '@/hooks/useDriverProfile';
 import type { DriverProfile } from '@/types/driver';
+import { useNotify } from '@/components/ui';
 
 const PROFILE_KEY = ['driver', 'profile'];
 
 export function useAcceptingOrders() {
+  const notify = useNotify();
   const { data: profile } = useDriverProfile();
   const queryClient = useQueryClient();
 
@@ -52,7 +53,7 @@ export function useAcceptingOrders() {
       if (context?.previous) {
         queryClient.setQueryData(PROFILE_KEY, context.previous);
       }
-      Alert.alert(
+      void notify(
         'Не удалось изменить',
         error instanceof Error ? error.message : 'Ошибка соединения с сервером',
       );

@@ -9,13 +9,14 @@
  * @updated: 2026-04-13 18:00:00
  */
 
-import { Alert } from 'react-native';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDriverStore } from '@/stores/driver.store';
 import { setStatus as apiSetStatus } from '@/api/driver.api';
 import type { DriverStatus } from '@/types/driver';
+import { useNotify } from '@/components/ui';
 
 export function useDriverStatus() {
+  const notify = useNotify();
   const { status, setStatus } = useDriverStore();
   const queryClient = useQueryClient();
 
@@ -40,7 +41,7 @@ export function useDriverStatus() {
         setStatus(context.previousStatus);
       }
       const msg = error instanceof Error ? error.message : 'Ошибка соединения с сервером';
-      Alert.alert('Ошибка', msg);
+      void notify('Не удалось сменить статус', msg);
     },
     retry: 2,
     retryDelay: 1000,

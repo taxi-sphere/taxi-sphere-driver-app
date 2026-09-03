@@ -15,8 +15,7 @@ import {
   StyleSheet,
   ScrollView,
   RefreshControl,
-  Alert,
-  ActivityIndicator,
+    ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -27,10 +26,12 @@ import { useLogout } from '@/hooks/useAuth';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
 import { formatCurrency } from '@/lib/utils';
 import { useTheme, type ThemeColors } from '@/lib/theme';
-import { FadeIn, Gradient, ScalePress } from '@/components/ui';
+import { FadeIn, Gradient, ScalePress , useConfirm } from '@/components/ui';
 import { radius } from '@/lib/theme';
 
+
 export default function ProfileScreen() {
+  const confirm = useConfirm();
   const router = useRouter();
   const { colors } = useTheme();
   const { status } = useDriverStatus();
@@ -46,11 +47,14 @@ export default function ProfileScreen() {
     staleTime: 5 * 60_000,
   });
 
-  const handleLogout = () => {
-    Alert.alert('Выход', 'Вы уверены, что хотите выйти?', [
-      { text: 'Отмена', style: 'cancel' },
-      { text: 'Выйти', style: 'destructive', onPress: () => logout.mutate() },
-    ]);
+  const handleLogout = async () => {
+    const ok = await confirm({
+      title: 'Выйти из приложения?',
+      message: 'Придётся войти заново по номеру телефона и паролю.',
+      confirmLabel: 'Выйти',
+      variant: 'danger',
+    });
+    if (ok) logout.mutate();
   };
 
   const fullName = profile

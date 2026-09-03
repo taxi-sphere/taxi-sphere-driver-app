@@ -13,7 +13,7 @@
  *   на карте как доступный.
  *
  *   v1.5.5 (историческое): кнопка «Закрыть приложение» переработана:
- *     • при активном заказе (`on_order`) — Alert-запрет с предложением
+ *     • при активном заказе (`on_order`) — запрет с предложением
  *       перезагрузить приложение (Updates.reloadAsync). Раньше
  *       `BackHandler.exitApp()` убивал foreground-service GPS в самый
  *       неподходящий момент.
@@ -44,7 +44,6 @@ import {
   BackHandler,
   PanResponder,
   Platform,
-  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -69,7 +68,8 @@ import {
   useThemedStyles,
   type Theme,
 } from '@/lib/theme';
-import { AppText, Divider, Gradient } from '@/components/ui';
+import { AppText, Divider, Gradient , useConfirm, useNotify } from '@/components/ui';
+
 
 const DRAWER_WIDTH = Math.min(Dimensions.get('window').width * 0.82, 340);
 
@@ -83,6 +83,8 @@ interface DrawerMenuProps {
 }
 
 export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
+  const confirm = useConfirm();
+  const notify = useNotify();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -196,51 +198,43 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
    * оказаться заперт в приложении: смену пишем на сервер по возможности, а
    * выходим в любом случае — с карты его снимет отсутствие heartbeat.
    */
-  const handleEndShiftAndExit = () => {
+  const handleEndShiftAndExit = async () => {
     const driverStatus = useDriverStore.getState().status;
 
     if (driverStatus === 'on_order') {
       haptics.reject();
-      Alert.alert(
-        'Нельзя выйти на заказе',
-        'У вас активный заказ. Завершите или отмените его, либо перезагрузите приложение (данные заказа сохранятся).',
-        [
-          { text: 'Отмена', style: 'cancel' },
-          {
-            text: 'Перезагрузить',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await Updates.reloadAsync();
-              } catch (e) {
-                void driverLogger.error('Updates.reloadAsync failed', {
-                  screen: 'drawer',
-                  action: 'reload_failed',
-                  message: e instanceof Error ? e.message : String(e),
-                });
-                Alert.alert('Ошибка', 'Не удалось перезагрузить приложение.');
-              }
-            },
-          },
-        ],
-      );
+      const reload = await confirm({
+        title: 'Нельзя выйти на заказе',
+        message:
+          'У вас активный заказ. Завершите или отмените его, либо перезагрузите ' +
+          'приложение — данные заказа сохранятся.',
+        confirmLabel: 'Перезагрузить',
+        variant: 'danger',
+      });
+      if (!reload) return;
+
+      try {
+        await Updates.reloadAsync();
+      } catch (e) {
+        void driverLogger.error('Updates.reloadAsync failed', {
+          screen: 'drawer',
+          action: 'reload_failed',
+          message: e instanceof Error ? e.message : String(e),
+        });
+        await notify('Ошибка', 'Не удалось перезагрузить приложение.');
+      }
       return;
     }
 
-    Alert.alert(
-      'Закончить смену?',
-      'Приложение закроется, заказы приходить перестанут. Чтобы снова выйти на линию — просто откройте его.',
-      [
-        { text: 'Отмена', style: 'cancel' },
-        {
-          text: 'Закончить',
-          style: 'destructive',
-          onPress: () => {
-            void endShiftAndExit();
-          },
-        },
-      ],
-    );
+    const ok = await confirm({
+      title: 'Закончить смену?',
+      message:
+        'Приложение закроется, заказы приходить перестанут. ' +
+        'Чтобы снова выйти на линию — просто откройте его.',
+      confirmLabel: 'Закончить',
+      variant: 'danger',
+    });
+    if (ok) void endShiftAndExit();
   };
 
   const endShiftAndExit = async () => {
@@ -273,10 +267,9 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
       setTimeout(() => BackHandler.exitApp(), 300);
     } else {
       // Apple запрещает программный выход и отклоняет такие приложения.
-      Alert.alert(
+      await notify(
         'Смена закончена',
         'Заказы больше не придут. Чтобы закрыть приложение, смахните его в переключателе приложений.',
-        [{ text: 'Понятно' }],
       );
     }
   };
@@ -326,12 +319,19 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
         </Gradient>
 
         <View style={styles.menuItems}>
-          {/* 1.5.22: «Заработок» и «История операций» убраны. Оба вели туда,
-            * куда и так ведёт нижняя вкладка «Деньги»: заработок — это она
-            * сама, а история операций открывается кнопкой на её экране. Два
-            * пути к одному месту — ровно та избыточность, ради устранения
-            * которой навигацию и перестраивали в 1.5.17. В меню остаётся
-            * только то, чего в вкладках нет. */}
+          {/* «Деньги» вернулись в меню (1.5.24, решение пользователя).
+            * В 1.5.22 их отсюда убрали как дубль нижней вкладки — теперь
+            * вкладки нет, и это единственный путь к заработку. Нижние места
+            * отданы заказам: их водитель перебирает всю смену, а заработок
+            * смотрит между заказами, когда руки свободны.
+            * «История операций» отдельным пунктом НЕ возвращается: на экран
+            * «Деньги» ведёт кнопка с него самого, и второй путь к тому же
+            * месту — ровно та избыточность, от которой уходили в 1.5.17. */}
+          <MenuItem
+            icon="wallet-outline"
+            label="Деньги"
+            onPress={() => navigate('/(main)/(tabs)/earnings')}
+          />
           <MenuItem
             icon="person-outline"
             label="Профиль"
@@ -348,7 +348,7 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
           <MenuItem
             icon="power-outline"
             label="Закончить смену и выйти"
-            onPress={handleEndShiftAndExit}
+            onPress={() => void handleEndShiftAndExit()}
             tint={colors.textMuted}
             showChevron={false}
           />
