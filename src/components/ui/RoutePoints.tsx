@@ -24,7 +24,15 @@ import { AppText } from './Text';
 
 export interface RoutePoint {
   address: string;
-  /** Подъезд, комментарий к адресу — второй строкой помельче. */
+  /**
+   * Подъезд — В СТРОКУ с адресом, тем же кеглем (1.5.33).
+   *
+   * До этого он склеивался с примечанием диспетчера в одну серую строку
+   * через « · », и две разные вещи читались как одна. Подъезд — часть
+   * адреса, примечание — то, что диспетчер сказал про эту точку.
+   */
+  entrance?: string | null;
+  /** Примечание диспетчера к этой точке — отдельной строкой помельче. */
   note?: string | null;
   kind: 'pickup' | 'stop' | 'dropoff';
   /** Кнопка «Ехать» или что-то ещё, прижатое к правому краю строки. */
@@ -102,13 +110,34 @@ export function RoutePoints({
               }}
             >
               <View style={{ flex: 1 }}>
-                <AppText
-                  variant={emphasized ? 'subheading' : 'body'}
-                  tone={point.muted ? 'muted' : 'primary'}
-                  numberOfLines={compact ? 1 : undefined}
+                {/* Адрес и подъезд одной строкой, с переносом: не влез —
+                    подъезд уходит вниз сам, а не давит адрес. */}
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'flex-end',
+                    flexWrap: 'wrap',
+                    gap: spacing.sm,
+                  }}
                 >
-                  {point.address}
-                </AppText>
+                  <AppText
+                    variant={emphasized ? 'subheading' : 'body'}
+                    tone={point.muted ? 'muted' : 'primary'}
+                    numberOfLines={compact ? 1 : undefined}
+                    style={{ flexShrink: 1 }}
+                  >
+                    {point.address}
+                  </AppText>
+                  {point.entrance ? (
+                    <AppText
+                      variant={emphasized ? 'subheading' : 'body'}
+                      weight="400"
+                      tone="muted"
+                    >
+                      подъезд {point.entrance}
+                    </AppText>
+                  ) : null}
+                </View>
                 {point.note ? (
                   <AppText variant="label" tone="muted" style={{ marginTop: 2 }}>
                     {point.note}

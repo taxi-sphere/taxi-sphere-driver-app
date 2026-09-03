@@ -952,7 +952,8 @@ function buildRoutePoints(
     {
       kind: 'pickup',
       address: shortenStreetType(pickup.address),
-      note: joinNotes(pickup.entrance ? `Подъезд ${pickup.entrance}` : null, order.pickupNote),
+      entrance: pickup.entrance,
+      note: order.pickupNote,
       action: navAction(order.pickupLat, order.pickupLng),
     },
   ];
@@ -962,7 +963,8 @@ function buildRoutePoints(
     points.push({
       kind: 'stop',
       address: shortenStreetType(point.address),
-      note: joinNotes(point.entrance ? `Подъезд ${point.entrance}` : null, stop.note),
+      entrance: point.entrance,
+      note: stop.note,
       action: navAction(stop.lat, stop.lng),
     });
   });
@@ -975,7 +977,8 @@ function buildRoutePoints(
     points.push({
       kind: 'dropoff',
       address: shortenStreetType(dropoff.address),
-      note: joinNotes(dropoff.entrance ? `Подъезд ${dropoff.entrance}` : null, order.dropoffNote),
+      entrance: dropoff.entrance,
+      note: order.dropoffNote,
       action: navAction(order.dropoffLat, order.dropoffLng),
     });
   } else {
@@ -992,11 +995,6 @@ function buildRoutePoints(
   }
 
   return points;
-}
-
-function joinNotes(...parts: (string | null | undefined)[]): string | null {
-  const kept = parts.filter(Boolean);
-  return kept.length > 0 ? kept.join(' · ') : null;
 }
 
 function DetailRow({
