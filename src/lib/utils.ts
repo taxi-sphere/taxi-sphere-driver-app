@@ -333,15 +333,34 @@ const STREET_TYPE_SHORT: Record<string, string> = {
  */
 export function shortenStreetType(address: string): string {
   return address
-    .split(' ')
-    .map((token) => {
-      // Знаки препинания (запятая после типа улицы) сохраняем как есть.
-      const match = /^([А-Яа-яЁё]+)(.*)$/.exec(token);
-      if (!match) return token;
-      const short = STREET_TYPE_SHORT[match[1]!.toLowerCase()];
-      return short ? short + match[2]! : token;
+    .split(',')
+    .map((segment) => {
+      const trimmed = segment.trimStart();
+      const indent = segment.slice(0, segment.length - trimmed.length);
+      const tokens = trimmed.split(' ');
+
+      /**
+       * СЛОВО-ТИП СОКРАЩАЕТСЯ, ТОЛЬКО ЕСЛИ ЗА НИМ ИДЁТ НАЗВАНИЕ.
+       *
+       * «Набережная» бывает и типом («набережная Обводного канала»), и
+       * собственным именем улицы («Набережная, д. 76»). Первая версия
+       * сокращала вслепую и съедала название целиком: адрес превращался в
+       * «наб., д. 76», где от улицы не осталось ничего. То же ждало бы
+       * Проезд, Площадь, Бульвар, Линию, Аллею — все они бывают именами.
+       *
+       * Признак имени простой: после слова в этом же сегменте больше ничего
+       * нет. Признак типа — за ним идёт слово с буквами. Цифра не годится:
+       * «Набережная 76» — это дом, а не название.
+       */
+      const next = tokens[1];
+      if (!next || !/[А-Яа-яЁёA-Za-z]/.test(next)) return segment;
+
+      const short = STREET_TYPE_SHORT[tokens[0]!.toLowerCase()];
+      if (!short) return segment;
+
+      return indent + [short, ...tokens.slice(1)].join(' ');
     })
-    .join(' ');
+    .join(',');
 }
 
 /**
