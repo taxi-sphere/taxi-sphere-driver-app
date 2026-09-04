@@ -45,7 +45,7 @@
  * @dependencies: useActiveOrders, useOrderActions, @/components/ui,
  *                @/components/order/*, @/components/map/OrderMap
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-04 (1.5.33 — подъезд обычным текстом внутри адреса,
+ * @updated: 2026-09-04 (1.5.34 — подъезд обычным текстом «под. N» внутри адреса,
  *                        примечание к адресу в шапке, чипы без номеров)
  */
 
