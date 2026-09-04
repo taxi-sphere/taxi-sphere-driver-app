@@ -536,12 +536,12 @@ export default function CurrentOrderScreen() {
    * кегль: он часть адресной строки, а не подпись к ней.
    *
    * Подъезд входит в РАСЧЁТ длины (1.5.33): он делит с адресом одну строку,
-   * и без учёта его «подъезд 12» адрес выбирал бы крупный шрифт, а потом
-   * всё равно переносился. Считаем в символах, как и раньше: «подъезд » —
-   * восемь, плюс сам номер, плюс пробел-разделитель.
+   * и без учёта его «под. 12» адрес выбирал бы крупный шрифт, а потом всё
+   * равно переносился. Считаем в символах, как и раньше: «под. » — пять,
+   * плюс сам номер, плюс пробел-разделитель.
    */
   const lineChars =
-    targetAddress.length + (target.entrance ? target.entrance.length + 9 : 0);
+    targetAddress.length + (target.entrance ? target.entrance.length + 6 : 0);
   const addressVariant = lineChars > LONG_ADDRESS_CHARS ? 'heading' : 'title';
   const action = ACTION_BY_STATUS[order.status];
 
@@ -721,6 +721,11 @@ export default function CurrentOrderScreen() {
                 * затевалось (поймано на эмуляторе). Вложенный течёт как
                 * обычный текст и переносится по словам.
                 *
+                * Сокращённо «под. 4» (1.5.34): полное слово занимало почти
+                * треть строки и раз за разом не помещалось рядом с адресом.
+                * Сокращение общепринятое и согласовано с тем, как экран уже
+                * пишет «д. 48» и «пр-т».
+                *
                 * Три строки, а не две: обрезка съела бы КОНЕЦ, то есть сам
                 * подъезд, а терять его нельзя — водитель без него звонит
                 * клиенту и спрашивает.
@@ -733,7 +738,7 @@ export default function CurrentOrderScreen() {
                 {targetAddress}
                 {target.entrance ? (
                   <AppText variant={addressVariant} weight="500" tone="muted">
-                    {'  подъезд '}
+                    {'  под. '}
                     {target.entrance}
                   </AppText>
                 ) : null}
