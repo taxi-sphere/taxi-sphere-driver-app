@@ -110,34 +110,27 @@ export function RoutePoints({
               }}
             >
               <View style={{ flex: 1 }}>
-                {/* Адрес и подъезд одной строкой, с переносом: не влез —
-                    подъезд уходит вниз сам, а не давит адрес. */}
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'flex-end',
-                    flexWrap: 'wrap',
-                    gap: spacing.sm,
-                  }}
+                {/* Подъезд ВЛОЖЕН в текст адреса, а не стоит соседом в
+                    строке с переносом: соседа Yoga переносит целиком, и
+                    «подъезд 2» занимает отдельную строку, стоит не хватить
+                    пары точек. Вложенный течёт как обычный текст. */}
+                <AppText
+                  variant={emphasized ? 'subheading' : 'body'}
+                  tone={point.muted ? 'muted' : 'primary'}
+                  numberOfLines={compact ? 1 : undefined}
                 >
-                  <AppText
-                    variant={emphasized ? 'subheading' : 'body'}
-                    tone={point.muted ? 'muted' : 'primary'}
-                    numberOfLines={compact ? 1 : undefined}
-                    style={{ flexShrink: 1 }}
-                  >
-                    {point.address}
-                  </AppText>
+                  {point.address}
                   {point.entrance ? (
                     <AppText
                       variant={emphasized ? 'subheading' : 'body'}
                       weight="400"
                       tone="muted"
                     >
-                      подъезд {point.entrance}
+                      {'  подъезд '}
+                      {point.entrance}
                     </AppText>
                   ) : null}
-                </View>
+                </AppText>
                 {point.note ? (
                   <AppText variant="label" tone="muted" style={{ marginTop: 2 }}>
                     {point.note}
