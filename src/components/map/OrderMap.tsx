@@ -29,23 +29,33 @@
  *   правило и причина целиком в шапке `@/lib/map-fit`. Вернуть общий план
  *   водитель может кнопкой в правом верхнем углу.
  *
- * @dependencies: react-native-maps, expo-location, @/lib/theme,
- *   @/hooks/useOrderRoute, @/lib/map-fit, @/lib/heading
+ *   КАК В НАВИГАТОРЕ (1.5.39). Машина притягивается к линии маршрута
+ *   (`@/lib/route-snap`), курс берётся с того отрезка дороги, на который
+ *   она встала, а сама линия рисуется от машины ВПЕРЁД. До этого стрелка
+ *   стояла там, куда её положил GPS, — во дворе, на соседнем доме, — а
+ *   линия маршрута шла рядом сама по себе и никуда от водителя не вела.
+ *
+ * @dependencies: react-native-maps, react-native-svg, expo-location,
+ *   @/lib/theme, @/hooks/useOrderRoute, @/lib/map-fit, @/lib/heading,
+ *   @/lib/route-snap
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-07 (1.5.38 — светлая карта в светлой теме, стрелка направления)
+ * @updated: 2026-09-07 (1.5.39 — машина на дороге, стрелка как в админке)
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { radius, useTheme } from '@/lib/theme';
 import { AppText } from '@/components/ui';
+import Svg, { G, Path } from 'react-native-svg';
 import { NIGHT_MAP_STYLE } from './night-map-style';
+import { DAY_MAP_STYLE } from './day-map-style';
 import { useOrderRoute } from '@/hooks/useOrderRoute';
 import { mapFitKey } from '@/lib/map-fit';
 import { bearingDegrees, distanceMeters, headingAlong, MIN_SPAN_M } from '@/lib/heading';
+import { routeAhead, snapToRoute } from '@/lib/route-snap';
 import type { CurrentOrder } from '@/types/order';
 
 interface OrderMapProps {
@@ -71,23 +81,32 @@ interface OrderMapProps {
  */
 const NO_ROUTE: { latitude: number; longitude: number }[] = [];
 
+/** Размер стрелки водителя на экране. */
+const ARROW_SIZE = 36;
+
+/** Сколько маркеру водителя разрешено перерисовываться после смены курса. */
+const TRACK_WINDOW_MS = 1000;
+
 /**
- * Дневной стиль карты — ПУСТОЙ МАССИВ, а не `undefined`.
+ * Разрешать маркеру перерисовку окном, а не постоянно.
  *
- * Это не косметика, а обход поведения библиотеки. `react-native-maps` 1.26
- * на Android применяет стиль так:
- *
- *     if (map != null && customMapStyleString != null) {
- *         map.setMapStyle(new MapStyleOptions(customMapStyleString));
- *     }
- *
- * `null` ПРОПУСКАЕТСЯ. То есть однажды применённый ночной стиль не
- * снимается никогда, и переключение приложения на светлую тему на карту не
- * действовало вовсе — карта оставалась чёрной при белом интерфейсе (1.5.38).
- * Пустой массив даёт строку `"[]"`: она не `null`, доходит до `setMapStyle`
- * и сбрасывает карту к стандартному дневному виду.
+ * Android рисует собственную разметку маркера в растр и обновляет её,
+ * только пока `tracksViewChanges` истинно. Держать истинным всегда —
+ * перерисовывать стрелку на каждом кадре карты и сажать батарею; выключить
+ * навсегда — маркер застывает пустым квадратом, это известная беда
+ * библиотеки. Секунда после каждой смены курса закрывает обе.
  */
-const DAY_MAP_STYLE: never[] = [];
+function useTracksViewChanges(value: unknown): boolean {
+  const [tracks, setTracks] = useState(true);
+
+  useEffect(() => {
+    setTracks(true);
+    const id = setTimeout(() => setTracks(false), TRACK_WINDOW_MS);
+    return () => clearTimeout(id);
+  }, [value]);
+
+  return tracks;
+}
 
 /** Как часто обновлять позицию водителя на карте. */
 const WATCH_INTERVAL_MS = 3000;
@@ -170,16 +189,40 @@ export function OrderMap({
   const routeCoords = route?.coordinates ?? NO_ROUTE;
 
   /**
+   * Машина на дороге, а не там, куда её положил приёмник.
+   *
+   * Проекция на маршрут делает сразу две вещи, которых по отдельности не
+   * добиться: ставит стрелку на дорогу и даёт ей курс этого куска дороги.
+   * Дальше `MAX_SNAP_M` от линии проекции нет — водитель действительно
+   * съехал с маршрута, и показывать его на ней было бы враньём.
+   */
+  const snap = useMemo(
+    () => (driverLocation ? snapToRoute(driverLocation, routeCoords) : null),
+    [driverLocation, routeCoords],
+  );
+  const driverPoint = snap?.point ?? driverLocation;
+
+  /**
    * Куда развернуть стрелку водителя.
    *
-   * Порядок источников не случаен. Собственное перемещение — самый честный
-   * ответ на «куда он едет»: это факт, а не план. Пока машина не тронулась,
-   * его нет, и тогда берём первый отрезок линии маршрута — он построен по
-   * дорогам и начинается в точке водителя, то есть показывает, куда ехать.
-   * Нет ни того, ни другого (маршрут не построился, машина стоит) —
-   * `null`, и маркер честно рисуется без стрелки, а не наугад на север.
+   * Порядок источников не случаен. Отрезок дороги под машиной — самый
+   * устойчивый: он не дрожит от шума приёмника и не пропадает, когда машина
+   * стоит. Съехал с маршрута — остаётся собственное перемещение, это факт, а
+   * не план. Не тронулся ни разу — первый отрезок линии маршрута: он
+   * построен по дорогам от водителя и показывает, куда ехать. Нет ничего —
+   * `null`, и рисуется точка без направления, а не стрелка наугад на север.
    */
-  const driverHeading = movementHeading ?? headingAlong(routeCoords);
+  const driverHeading = snap?.bearing ?? movementHeading ?? headingAlong(routeCoords);
+
+  /**
+   * Линия рисуется ОТ машины вперёд: пройденный хвост навигатор не
+   * показывает, а главное — так линия начинается ровно под стрелкой, а не
+   * висит рядом с ней. Охвату (`fitAll`) отдаётся полный маршрут: «показать
+   * весь маршрут» должно показывать весь.
+   */
+  const lineCoords = useMemo(() => routeAhead(routeCoords, snap), [routeCoords, snap]);
+
+  const tracksDriver = useTracksViewChanges(driverHeading);
 
   // Позиция водителя в охвате нужна, но НЕ должна его перезапускать —
   // поэтому лежит в ref, а не в зависимостях эффекта. См. комментарий к
@@ -299,19 +342,19 @@ export function OrderMap({
         rotateEnabled={false}
         pitchEnabled={false}
       >
-        {routeCoords.length >= 2 && (
+        {lineCoords.length >= 2 && (
           <>
             {/* Подложка светлее и шире — линия читается и на тёмной карте,
                 и поверх пёстрых кварталов. */}
             <Polyline
-              coordinates={routeCoords}
+              coordinates={lineCoords}
               strokeColor={theme.colors.mapRouteCasing}
               strokeWidth={9}
               lineCap="round"
               lineJoin="round"
             />
             <Polyline
-              coordinates={routeCoords}
+              coordinates={lineCoords}
               strokeColor={theme.colors.mapRouteLine}
               strokeWidth={5}
               lineCap="round"
@@ -320,9 +363,20 @@ export function OrderMap({
           </>
         )}
 
-        {driverLocation && (
-          <Marker coordinate={driverLocation} title="Вы здесь" anchor={{ x: 0.5, y: 0.5 }}>
-            <MapPin color={theme.colors.info} icon="car-sport" ring rotation={driverHeading} />
+        {driverPoint && (
+          <Marker
+            coordinate={driverPoint}
+            title="Вы здесь"
+            anchor={{ x: 0.5, y: 0.5 }}
+            // Маркер со своей разметкой Android перерисовывает только пока
+            // это разрешено. Держать разрешение всегда — рисовать стрелку
+            // каждый кадр карты; выключить сразу — получить пустой квадрат
+            // вместо неё. Поэтому окно на секунду после смены курса.
+            tracksViewChanges={tracksDriver}
+          >
+            {/* Цвет НЕ тот, что у линии маршрута: одинаковый синий сливался
+                бы со своей же линией, и стрелку приходилось бы искать. */}
+            <DriverArrow color={theme.colors.primary} heading={driverHeading} />
           </Marker>
         )}
 
@@ -388,45 +442,73 @@ export function OrderMap({
 }
 
 /**
+ * Стрелка водителя — тот же шеврон, что на карте диспетчера
+ * (`osm-live-map-panel.tsx`, путь `M16 2 L24 27 L16 21 L8 27 Z`).
+ *
+ * ПОЧЕМУ НЕ КРУЖОК СО ЗНАЧКОМ. До 1.5.39 это был цветной кружок, внутри
+ * которого крутилась иконка стрелки: направление читалось плохо (стрелка
+ * маленькая и заперта в круге), а сам круг закрывал перекрёсток. Шеврон
+ * острый, его направление видно боковым зрением, и это ровно то, что
+ * водитель уже видит у себя в админке и в любом навигаторе.
+ *
+ * Без курса рисуется точка с обводкой — как «вы здесь» в картах, когда
+ * направление неизвестно. Стрелка наугад на север врала бы.
+ *
+ * Вращение делает сам SVG вокруг центра холста: угол попадает в разметку
+ * маркера, а не в трансформ снаружи, поэтому Android перерисовывает его
+ * вместе с маркером и стрелка не отстаёт от поворота.
+ */
+function DriverArrow({ color, heading }: { color: string; heading: number | null }) {
+  const theme = useTheme();
+  const hasHeading = heading != null && Number.isFinite(heading);
+
+  if (!hasHeading) {
+    return (
+      <View style={[styles.dot, { backgroundColor: color, borderColor: theme.colors.surface }]} />
+    );
+  }
+
+  // Обёртка с ЯВНЫМИ размерами обязательна. Android снимает разметку маркера
+  // в картинку до того, как её измерит, и вложенный SVG без заданной снаружи
+  // высоты схлопывается: на эмуляторе стрелка выходила размером в несколько
+  // пикселей — видно, что что-то нарисовано, и не видно что.
+  return (
+    <View style={styles.arrow}>
+      <Svg width={ARROW_SIZE} height={ARROW_SIZE} viewBox="0 0 32 32">
+        <G rotation={heading} originX={16} originY={16}>
+          <Path
+            d="M16 2 L24 27 L16 21 L8 27 Z"
+            fill={color}
+            stroke={theme.colors.surface}
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+          />
+        </G>
+      </Svg>
+    </View>
+  );
+}
+
+/**
  * Маркер: цветной кружок со значком и белой обводкой.
  *
  * Обводка обязательна — без неё тёмный маркер теряется на ночной карте, а
  * светлый на дневной.
- *
- * СТРЕЛКА НАПРАВЛЕНИЯ (1.5.38). Если задан `rotation`, вместо значка
- * рисуется стрелка, развёрнутая по курсу. До этого маркер водителя был
- * неподвижным кружком с машинкой: куда водитель повёрнут, карта не
- * сообщала вовсе, и линия маршрута просто обрывалась у кружка. Крутится
- * ТОЛЬКО стрелка внутри — сам кружок и кольцо остаются на месте, иначе
- * обводка и подсветка «дышали» бы вместе с поворотом.
  */
 function MapPin({
   color,
   icon,
   ring = false,
-  rotation = null,
 }: {
   color: string;
   icon: keyof typeof Ionicons.glyphMap;
   ring?: boolean;
-  /** Курс в градусах (0 — на север). `null` — направление неизвестно. */
-  rotation?: number | null;
 }) {
   const theme = useTheme();
-  const hasHeading = rotation != null && Number.isFinite(rotation);
 
   return (
     <View style={[styles.pin, { backgroundColor: color, borderColor: theme.colors.surface }]}>
-      {hasHeading ? (
-        <Ionicons
-          name="arrow-up"
-          size={17}
-          color="#ffffff"
-          style={{ transform: [{ rotate: `${rotation}deg` }] }}
-        />
-      ) : (
-        <Ionicons name={icon} size={15} color="#ffffff" />
-      )}
+      <Ionicons name={icon} size={15} color="#ffffff" />
       {ring && <View style={[styles.pinRing, { borderColor: color }]} />}
     </View>
   );
@@ -450,6 +532,19 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.18,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
+  },
+  arrow: {
+    width: ARROW_SIZE,
+    height: ARROW_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // «Вы здесь» без направления — точка, как в картах.
+  dot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 3,
   },
   pin: {
     width: 30,
