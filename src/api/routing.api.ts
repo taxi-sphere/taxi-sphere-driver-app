@@ -30,7 +30,7 @@ const routeResponseSchema = z.object({
 
 export interface OrderRoute {
   target: 'pickup' | 'dropoff';
-  coordinates: Array<{ latitude: number; longitude: number }>;
+  coordinates: { latitude: number; longitude: number }[];
   distanceMeters: number | null;
   durationSeconds: number | null;
 }

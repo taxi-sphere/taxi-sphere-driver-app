@@ -25,13 +25,18 @@
  *   интернет пропал. Это не ошибка и не пустой экран — карта остаётся ровно
  *   такой, какой была до 1.5.36.
  *
- * @dependencies: react-native-maps, expo-location, @/lib/theme, @/hooks/useOrderRoute
+ *   ОХВАТ КАРТЫ (1.5.37) пересчитывается на события, а не на движение —
+ *   правило и причина целиком в шапке `@/lib/map-fit`. Вернуть общий план
+ *   водитель может кнопкой в правом верхнем углу.
+ *
+ * @dependencies: react-native-maps, expo-location, @/lib/theme,
+ *   @/hooks/useOrderRoute, @/lib/map-fit
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-04 (1.5.36 — линия маршрута по дорогам)
+ * @updated: 2026-09-04 (1.5.37 — охват по событиям, кнопка общего плана)
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
@@ -39,6 +44,7 @@ import { radius, useTheme } from '@/lib/theme';
 import { AppText } from '@/components/ui';
 import { NIGHT_MAP_STYLE } from './night-map-style';
 import { useOrderRoute } from '@/hooks/useOrderRoute';
+import { mapFitKey } from '@/lib/map-fit';
 import type { CurrentOrder } from '@/types/order';
 
 interface OrderMapProps {
@@ -62,7 +68,7 @@ interface OrderMapProps {
  * стоит в зависимостях эффекта автомасштаба: карта пересчитывала бы охват
  * бесконечно.
  */
-const NO_ROUTE: Array<{ latitude: number; longitude: number }> = [];
+const NO_ROUTE: { latitude: number; longitude: number }[] = [];
 
 /** Как часто обновлять позицию водителя на карте. */
 const WATCH_INTERVAL_MS = 3000;
@@ -118,8 +124,14 @@ export function OrderMap({
   });
   const routeCoords = route?.coordinates ?? NO_ROUTE;
 
-  // Авто-zoom на все маркеры
-  useEffect(() => {
+  // Позиция водителя в охвате нужна, но НЕ должна его перезапускать —
+  // поэтому лежит в ref, а не в зависимостях эффекта. См. комментарий к
+  // fitKey ниже.
+  const driverLocationRef = useRef(driverLocation);
+  driverLocationRef.current = driverLocation;
+
+  /** Подогнать карту так, чтобы влезли все точки и линия маршрута. */
+  const fitAll = useCallback(() => {
     if (!mapRef.current) return;
 
     const coords: { latitude: number; longitude: number }[] = [];
@@ -133,9 +145,8 @@ export function OrderMap({
     order.stops?.forEach((s) => {
       if (s.lat && s.lng) coords.push({ latitude: s.lat, longitude: s.lng });
     });
-    if (driverLocation) {
-      coords.push(driverLocation);
-    }
+    const here = driverLocationRef.current;
+    if (here) coords.push(here);
     // Маршрут по дорогам может выходить за прямоугольник по меткам — объезд
     // реки или одностороннее движение уводят линию в сторону. Без неё в
     // расчёте часть пути оставалась бы за краем экрана.
@@ -161,10 +172,28 @@ export function OrderMap({
     order.dropoffLat,
     order.dropoffLng,
     order.stops,
-    driverLocation,
-    bottomInset,
     routeCoords,
+    bottomInset,
   ]);
+
+  // Охват пересчитывается на события, а не на движение — правило и причина
+  // целиком в шапке @/lib/map-fit, там же оно покрыто тестами.
+  const fitKey = mapFitKey({
+    orderId: order.id,
+    status: order.status,
+    hasPickup: order.pickupLat != null,
+    hasDropoff: order.dropoffLat != null,
+    stopsCount: order.stops?.length ?? 0,
+    hasRoute: routeCoords.length > 0,
+    hasDriverLocation: driverLocation != null,
+  });
+
+  useEffect(() => {
+    fitAll();
+    // fitAll намеренно НЕ в зависимостях: он пересоздаётся при каждом новом
+    // маршруте, и эффект снова стал бы срабатывать на движение.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitKey]);
 
   const hasPickup = order.pickupLat != null && order.pickupLng != null;
   const hasDropoff = order.dropoffLat != null && order.dropoffLng != null;
@@ -270,6 +299,27 @@ export function OrderMap({
           </Marker>
         )}
       </MapView>
+
+      {/* Вернуть общий план. Появилась вместе с отказом от автомасштаба на
+          каждую точку (1.5.37): раньше карта возвращалась сама, теперь это
+          решение водителя. Справа сверху — слева над картой стоят вкладки
+          «Текущий / Встречный». */}
+      <Pressable
+        onPress={fitAll}
+        accessibilityRole="button"
+        accessibilityLabel="Показать весь маршрут"
+        hitSlop={8}
+        style={({ pressed }) => [
+          styles.fitButton,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: theme.colors.border,
+            opacity: pressed ? 0.7 : 1,
+          },
+        ]}
+      >
+        <Ionicons name="scan-outline" size={20} color={theme.colors.textPrimary} />
+      </Pressable>
     </View>
   );
 }
@@ -301,6 +351,23 @@ function MapPin({
 
 const styles = StyleSheet.create({
   centered: { alignItems: 'center', justifyContent: 'center' },
+  fitButton: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Тень нужна: без неё белая кнопка теряется на светлой карте.
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
   pin: {
     width: 30,
     height: 30,
