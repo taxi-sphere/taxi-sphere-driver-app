@@ -15,19 +15,30 @@
  *   • `bottomInset` — авто-масштаб учитывает шторку, иначе она накрывала
  *     нижнюю точку маршрута, и водитель видел маршрут «наполовину».
  *
- * @dependencies: react-native-maps, expo-location, @/lib/theme
+ *   ЛИНИЯ МАРШРУТА (1.5.36). До неё карта показывала три метки — водитель,
+ *   клиент, точка назначения — и молчала о том, как между ними ехать: путь
+ *   водитель достраивал в голове или уходил в навигатор. Линия строится по
+ *   дорогам, на сервере (см. `useOrderRoute`), и ведёт туда, куда водителю
+ *   ехать сейчас: до посадки к клиенту, после — к точке назначения.
+ *
+ *   Линии может не быть: у заказа нет координат цели, роутер недоступен,
+ *   интернет пропал. Это не ошибка и не пустой экран — карта остаётся ровно
+ *   такой, какой была до 1.5.36.
+ *
+ * @dependencies: react-native-maps, expo-location, @/lib/theme, @/hooks/useOrderRoute
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-01 (v1.5.17 — полноэкранный режим, свои маркеры, ночной стиль)
+ * @updated: 2026-09-04 (1.5.36 — линия маршрута по дорогам)
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { radius, useTheme } from '@/lib/theme';
 import { AppText } from '@/components/ui';
 import { NIGHT_MAP_STYLE } from './night-map-style';
+import { useOrderRoute } from '@/hooks/useOrderRoute';
 import type { CurrentOrder } from '@/types/order';
 
 interface OrderMapProps {
@@ -43,6 +54,15 @@ interface OrderMapProps {
   bottomInset?: number;
   style?: StyleProp<ViewStyle>;
 }
+
+/**
+ * Один общий пустой массив на все рендеры без маршрута.
+ *
+ * Литерал `[]` в теле компонента — новая ссылка на каждый рендер, а массив
+ * стоит в зависимостях эффекта автомасштаба: карта пересчитывала бы охват
+ * бесконечно.
+ */
+const NO_ROUTE: Array<{ latitude: number; longitude: number }> = [];
 
 /** Как часто обновлять позицию водителя на карте. */
 const WATCH_INTERVAL_MS = 3000;
@@ -90,6 +110,14 @@ export function OrderMap({
     };
   }, []);
 
+  const route = useOrderRoute({
+    orderId: order.id,
+    status: order.status,
+    lat: driverLocation?.latitude,
+    lng: driverLocation?.longitude,
+  });
+  const routeCoords = route?.coordinates ?? NO_ROUTE;
+
   // Авто-zoom на все маркеры
   useEffect(() => {
     if (!mapRef.current) return;
@@ -108,6 +136,10 @@ export function OrderMap({
     if (driverLocation) {
       coords.push(driverLocation);
     }
+    // Маршрут по дорогам может выходить за прямоугольник по меткам — объезд
+    // реки или одностороннее движение уводят линию в сторону. Без неё в
+    // расчёте часть пути оставалась бы за краем экрана.
+    coords.push(...routeCoords);
 
     if (coords.length >= 2) {
       mapRef.current.fitToCoordinates(coords, {
@@ -131,6 +163,7 @@ export function OrderMap({
     order.stops,
     driverLocation,
     bottomInset,
+    routeCoords,
   ]);
 
   const hasPickup = order.pickupLat != null && order.pickupLng != null;
@@ -174,6 +207,27 @@ export function OrderMap({
         showsCompass={false}
         toolbarEnabled={false}
       >
+        {routeCoords.length >= 2 && (
+          <>
+            {/* Подложка светлее и шире — линия читается и на тёмной карте,
+                и поверх пёстрых кварталов. */}
+            <Polyline
+              coordinates={routeCoords}
+              strokeColor={theme.colors.mapRouteCasing}
+              strokeWidth={9}
+              lineCap="round"
+              lineJoin="round"
+            />
+            <Polyline
+              coordinates={routeCoords}
+              strokeColor={theme.colors.mapRouteLine}
+              strokeWidth={5}
+              lineCap="round"
+              lineJoin="round"
+            />
+          </>
+        )}
+
         {driverLocation && (
           <Marker coordinate={driverLocation} title="Вы здесь" anchor={{ x: 0.5, y: 0.5 }}>
             <MapPin color={theme.colors.info} icon="car-sport" ring />

@@ -85,6 +85,10 @@ export interface ThemeColors {
   tabBar: string;
   /** Подложка карты, пока тайлы не загрузились. */
   mapPlaceholder: string;
+  /** Линия маршрута по дорогам на карте заказа. */
+  mapRouteLine: string;
+  /** Обводка под линией маршрута — чтобы читалась поверх любой карты. */
+  mapRouteCasing: string;
 }
 
 const light: ThemeColors = {
@@ -129,6 +133,10 @@ const light: ThemeColors = {
   skeleton: '#e4e7ec',
   tabBar: '#ffffff',
   mapPlaceholder: '#e8eaee',
+  // Синий насыщеннее интерфейсного: на дневной карте линия конкурирует с
+  // дорогами, реками и парками, а не с фоном приложения.
+  mapRouteLine: '#2563eb',
+  mapRouteCasing: '#ffffff',
 };
 
 /**
@@ -188,6 +196,10 @@ const dark: ThemeColors = {
   skeleton: '#1f2a40',
   tabBar: '#141c2e',
   mapPlaceholder: '#111a2b',
+  // На ночной карте белая обводка слепила бы, поэтому тёмная: линия
+  // отделяется от полотна дороги, но не светится.
+  mapRouteLine: '#60a5fa',
+  mapRouteCasing: '#0b1220',
 };
 
 /** Уровень глубины: 0 — вровень с фоном, 3 — шторка над всем. */
