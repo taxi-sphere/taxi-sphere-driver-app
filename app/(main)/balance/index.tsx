@@ -33,7 +33,8 @@ import {
   type Theme,
   type ThemeColors,
 } from '@/lib/theme';
-import { AppText, EmptyState, Gradient, Screen } from '@/components/ui';
+import { AppText, EmptyState, Gradient, OfflineState, Screen } from '@/components/ui';
+import { useConnectionStore } from '@/stores/connection.store';
 import type { BalanceTransaction, BalanceTransactionType } from '@/types/balance';
 
 type FilterType = 'all' | BalanceTransactionType;
@@ -91,6 +92,7 @@ export default function BalanceHistoryScreen() {
     refetch,
     error,
   } = useBalanceTransactions(filter);
+  const isNetworkOnline = useConnectionStore((s) => s.isNetworkOnline);
 
   const items = useMemo(
     () => data?.pages.flatMap((p) => p.items) ?? [],
@@ -154,7 +156,9 @@ export default function BalanceHistoryScreen() {
       </View>
 
       {/* Список */}
-      {isLoading ? (
+      {!isNetworkOnline && items.length === 0 ? (
+        <OfflineState what="Операции" />
+      ) : isLoading ? (
         <View style={styles.centered}>
           <ActivityIndicator color={colors.primary} size="large" />
         </View>

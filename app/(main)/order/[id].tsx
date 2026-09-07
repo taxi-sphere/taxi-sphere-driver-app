@@ -48,7 +48,9 @@ import {
   Screen,
   Surface,
   type RoutePoint,
+  OfflineState,
 } from '@/components/ui';
+import { useConnectionStore } from '@/stores/connection.store';
 
 const ACCEPT_TIMER_SEC = 30;
 const DEFAULT_ETA_MIN = 5;
@@ -77,6 +79,7 @@ export default function OrderDetailScreen() {
     staleTime: 10_000,
     retry: 1,
   });
+  const isNetworkOnline = useConnectionStore((s) => s.isNetworkOnline);
 
   const order = details?.order;
 
@@ -106,6 +109,14 @@ export default function OrderDetailScreen() {
     if (accept.isPending) return;
     setConfirmOpen(false);
   };
+
+  if (!isNetworkOnline && !order) {
+    return (
+      <Screen>
+        <OfflineState what="Данные заказа" />
+      </Screen>
+    );
+  }
 
   if (isLoading && !order) {
     return (

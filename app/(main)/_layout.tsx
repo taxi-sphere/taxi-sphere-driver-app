@@ -6,10 +6,10 @@
  * @dependencies: expo-router, connection.store, settings.store,
  *                @/lib/theme, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-01 (v1.5.17 - tema)
+ * @updated: 2026-09-07 (1.5.38 — заглушка «нет подключения» после двух неудач подряд, не после одной)
  */
 
-import { useEffect, useCallback, useState } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
 import { View, TextInput, StyleSheet } from 'react-native';
 import { Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,27 +22,51 @@ import { icon, radius, spacing, text, useTheme, useThemedStyles, type Theme } fr
 import { AppText, Button, Screen , useConfirm, useNotify } from '@/components/ui';
 
 
+/** Сколько ждать ответа проверки, мс. */
+const PROBE_TIMEOUT_MS = 10_000;
+
+/** Сколько неудач подряд считать настоящей потерей сервера. */
+const FAILURES_BEFORE_BLOCK = 2;
+
 export default function MainLayout() {
   const isServerReachable = useConnectionStore((s) => s.isServerReachable);
   const setServerReachable = useConnectionStore((s) => s.setServerReachable);
   const [checking, setChecking] = useState(false);
+  /**
+   * Сколько проверок подряд не прошло.
+   *
+   * ЗАЧЕМ СЧЁТЧИК. До 1.5.38 ОДНА неудачная проверка заменяла всё приложение
+   * экраном «Нет подключения» — а на слабой мобильной связи десятисекундный
+   * таймаут срывается запросто (в логах водителя 07.09.2026 канал проседал до
+   * 0,12 КБ/с). Водитель терял приложение целиком из-за одного пакета, хотя
+   * данные у него уже загружены и заказ ведётся. Экран-заглушку показываем,
+   * когда сервер не отвечает ДВА раза подряд — то есть не меньше пятнадцати
+   * секунд, а не мгновение.
+   */
+  const failuresRef = useRef(0);
 
   const checkServer = useCallback(async () => {
     try {
       setChecking(true);
-      // Используем /api/v1/geocode как health probe — /api/health может
-      // блокироваться nginx/reverse-proxy, а /api/v1/* точно работает
       const url = `${getApiUrl()}/api/health`;
-      console.log('[MainLayout] Checking server:', url);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timeoutId);
-      console.log('[MainLayout] Server response:', res.status);
-      setServerReachable(res.ok);
-    } catch (err) {
-      console.error('[MainLayout] Server check failed:', err);
-      setServerReachable(false);
+
+      if (res.ok) {
+        failuresRef.current = 0;
+        setServerReachable(true);
+      } else {
+        failuresRef.current += 1;
+        if (failuresRef.current >= FAILURES_BEFORE_BLOCK) setServerReachable(false);
+      }
+    } catch {
+      // Причину не логируем: писать «сервер недоступен» в журнал НА СЕРВЕРЕ
+      // бессмысленно, а console.* в релизной сборке запрещён правилами
+      // проекта. Значение имеет только счётчик неудач.
+      failuresRef.current += 1;
+      if (failuresRef.current >= FAILURES_BEFORE_BLOCK) setServerReachable(false);
     } finally {
       setChecking(false);
     }

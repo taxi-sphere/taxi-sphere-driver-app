@@ -26,7 +26,8 @@ import { useLogout } from '@/hooks/useAuth';
 import { useDriverStatus } from '@/hooks/useDriverStatus';
 import { formatCurrency } from '@/lib/utils';
 import { useTheme, type ThemeColors } from '@/lib/theme';
-import { FadeIn, Gradient, ScalePress , useConfirm } from '@/components/ui';
+import { FadeIn, Gradient, OfflineState, ScalePress , useConfirm } from '@/components/ui';
+import { useConnectionStore } from '@/stores/connection.store';
 import { radius } from '@/lib/theme';
 
 
@@ -46,6 +47,7 @@ export default function ProfileScreen() {
     queryFn: getProfile,
     staleTime: 5 * 60_000,
   });
+  const isNetworkOnline = useConnectionStore((s) => s.isNetworkOnline);
 
   const handleLogout = async () => {
     const ok = await confirm({
@@ -64,6 +66,16 @@ export default function ProfileScreen() {
   const vehicleInfo = profile
     ? [profile.vehicleBrand, profile.vehicleModel, profile.vehicleYear].filter(Boolean).join(' ') || null
     : null;
+
+  // Без сети и без данных профиль показал бы «Водитель» и аватар с «?» — это
+  // не заглушка загрузки, а выглядит как настоящий, но пустой профиль.
+  if (!isNetworkOnline && !profile) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <OfflineState what="Данные профиля" />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>

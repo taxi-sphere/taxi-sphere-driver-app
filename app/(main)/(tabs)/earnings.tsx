@@ -40,7 +40,9 @@ import {
   Screen,
   Segmented,
   Surface,
+  OfflineState,
 } from '@/components/ui';
+import { useConnectionStore } from '@/stores/connection.store';
 import { icon as iconTokens, spacing, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
 import type { RecentOrder } from '@/types/earnings';
 
@@ -96,6 +98,7 @@ export default function EarningsScreen() {
   const [period, setPeriod] = useState<Period>('today');
   const { dateFrom, dateTo } = useMemo(() => getDateRange(period), [period]);
   const { data, isLoading, refetch, isRefetching } = useEarnings(dateFrom, dateTo);
+  const isNetworkOnline = useConnectionStore((s) => s.isNetworkOnline);
   const { data: profile } = useDriverProfile();
 
   const daily = data?.daily ?? [];
@@ -164,6 +167,14 @@ export default function EarningsScreen() {
       </AppText>
     </View>
   );
+
+  if (!isNetworkOnline && !data) {
+    return (
+      <Screen>
+        <OfflineState what="Поездки" />
+      </Screen>
+    );
+  }
 
   if (isLoading && !data) {
     return (

@@ -31,6 +31,7 @@
 import { AppState, type AppStateStatus } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { focusManager, onlineManager } from '@tanstack/react-query';
+import { useConnectionStore } from '@/stores/connection.store';
 
 /**
  * Считать ли текущее состояние сети «онлайн».
@@ -62,7 +63,14 @@ export function installQueryBridges(): void {
 
   onlineManager.setEventListener((setOnline) => {
     const unsubscribe = NetInfo.addEventListener((state) => {
-      setOnline(isOnline(state));
+      const online = isOnline(state);
+      setOnline(online);
+      // Тем же событием обновляем `connection.store`. Поле `isNetworkOnline`
+      // объявили ещё в первой версии store и НИКТО его не выставлял — оно
+      // навсегда оставалось `true`, то есть врало. Теперь у него есть
+      // единственный источник, и экраны читают состояние сети оттуда, а не
+      // заводят по своему флагу (1.5.38).
+      useConnectionStore.getState().setNetworkOnline(online);
     });
     return unsubscribe;
   });

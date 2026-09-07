@@ -41,7 +41,8 @@ import {
   ScalePress,
   Screen,
   Surface,
- useConfirm, useNotify } from '@/components/ui';
+ OfflineState, useConfirm, useNotify } from '@/components/ui';
+import { useConnectionStore } from '@/stores/connection.store';
 import type { PayoutMethod, PayoutRequest } from '@/api/payout.api';
 
 
@@ -62,6 +63,7 @@ export default function PayoutScreen() {
   const styles = useThemedStyles(createStyles);
 
   const { data, isLoading, error, refetch } = usePayoutData();
+  const isNetworkOnline = useConnectionStore((s) => s.isNetworkOnline);
   const create = useCreatePayout();
 
   const [methodId, setMethodId] = useState<string | null>(null);
@@ -121,6 +123,17 @@ export default function PayoutScreen() {
           description="Проверьте связь и попробуйте ещё раз"
           action={{ label: 'Повторить', onPress: () => void refetch() }}
         />
+      </Screen>
+    );
+  }
+
+  // Строго до «Вывод пока недоступен»: без сети мы не знаем, настроила
+  // служба способы вывода или нет, и утверждать, что не настроила, нельзя.
+  if (!isNetworkOnline && methods.length === 0) {
+    return (
+      <Screen>
+        <Stack.Screen options={{ headerShown: true, headerTitle: 'Вывод средств' }} />
+        <OfflineState what="Способы вывода" />
       </Screen>
     );
   }

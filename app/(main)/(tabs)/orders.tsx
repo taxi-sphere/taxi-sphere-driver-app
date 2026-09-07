@@ -61,7 +61,8 @@ export default function OrdersScreen() {
   const queryClient = useQueryClient();
   const notify = useNotify();
 
-  const { data: orders, isLoading, refetch, meta, error, isOffline } = useAvailableOrders();
+  const { data: orders, isLoading, refetch, meta, error, isOffline, isDriverOffline } =
+    useAvailableOrders();
   const { accept } = useOrderActions();
   const socketStatus = useConnectionStore((s) => s.socketStatus);
   const isDisconnected = socketStatus !== 'connected';
@@ -310,6 +311,7 @@ export default function OrdersScreen() {
             <AvailableEmpty
               blockedMessage={blockedMessage}
               offline={isOffline}
+              driverOffline={isDriverOffline}
               onGoToOrder={() => router.replace('/(main)/(tabs)/current')}
             />
           }
@@ -343,13 +345,29 @@ export default function OrdersScreen() {
 function AvailableEmpty({
   blockedMessage,
   offline,
+  driverOffline,
   onGoToOrder,
 }: {
   blockedMessage: string | null;
   /** Сети нет — список не пуст, его просто неоткуда взять. */
   offline: boolean;
+  /** Водитель не на линии — заказы вообще не запрашивались. */
+  driverOffline: boolean;
   onGoToOrder: () => void;
 }) {
+  // Раньше всего остального: водитель вне линии видел «Свободных заказов
+  // нет» и ждал, что они появятся сами. Они не появятся — запрос выключен.
+  if (driverOffline) {
+    return (
+      <EmptyState
+        icon="power-outline"
+        tone="warning"
+        title="Вы не на линии"
+        description="Заказы не приходят, пока статус «Оффлайн». Смените статус в шапке экрана."
+      />
+    );
+  }
+
   // Раньше всего: «Свободных заказов нет» без интернета — прямая ложь,
   // мы про заказы сейчас ничего не знаем.
   if (offline) {

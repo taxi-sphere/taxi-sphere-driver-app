@@ -110,7 +110,9 @@ import {
   useDialog,
   useNotify,
   type RoutePoint,
+  OfflineState,
 } from '@/components/ui';
+import { useConnectionStore } from '@/stores/connection.store';
 import { OrderProgress } from '@/components/order/OrderProgress';
 import { OrderMap } from '@/components/map/OrderMap';
 import { SHEET_CHROME, SHEET_COLLAPSED, sheetExpandedHeight } from '@/lib/sheet-metrics';
@@ -174,6 +176,7 @@ const ACTION_BY_STATUS: Partial<
 export default function CurrentOrderScreen() {
   const router = useRouter();
   const { data: orders, isLoading, error, refetch } = useActiveOrders();
+  const isNetworkOnline = useConnectionStore((s) => s.isNetworkOnline);
 
   /**
    * Какой из активных заказов открыт.
@@ -474,6 +477,16 @@ export default function CurrentOrderScreen() {
   }, [askDialog, order]);
 
   // ─── Состояния без заказа ────────────────────────────────────────────
+
+  // Раньше загрузки: без сети запрос стоит на паузе, и «крутилка» врала бы
+  // про идущую загрузку, которой нет.
+  if (!isNetworkOnline && !order) {
+    return (
+      <Screen>
+        <OfflineState what="Заказы" />
+      </Screen>
+    );
+  }
 
   if (isLoading) {
     return (

@@ -40,7 +40,9 @@ import {
   StaggerItem,
   Surface,
   useNotify,
+  OfflineState,
 } from '@/components/ui';
+import { useConnectionStore } from '@/stores/connection.store';
 import { spacing, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
 import { haptics } from '@/lib/haptics';
 import type { AvailableOrder } from '@/types/order';
@@ -53,6 +55,7 @@ export default function PreliminaryScreen() {
   const queryClient = useQueryClient();
 
   const { data, isLoading, error, refetch } = useScheduledOrders();
+  const isNetworkOnline = useConnectionStore((s) => s.isNetworkOnline);
   const orders = data ?? [];
 
   /** Какой заказ сейчас подтверждаем — чтобы гасить только его кнопку. */
@@ -127,7 +130,9 @@ export default function PreliminaryScreen() {
         </Surface>
       ))}
 
-      {error ? (
+      {!isNetworkOnline && orders.length === 0 ? (
+        <OfflineState what="Предзаказы" />
+      ) : error ? (
         <EmptyState
           icon="cloud-offline-outline"
           tone="danger"

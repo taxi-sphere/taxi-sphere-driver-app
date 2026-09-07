@@ -31,6 +31,7 @@ export { BottomSheet } from './BottomSheet';
 export { Divider } from './Divider';
 export { Gradient, type GradientDirection } from './Gradient';
 export { EmptyState } from './EmptyState';
+export { OfflineState } from './OfflineState';
 export { RoutePoints, type RoutePoint } from './RoutePoints';
 export { Segmented, type SegmentOption } from './Segmented';
 export { Skeleton, OrderCardSkeleton, EarningsSkeleton } from './Skeleton';
