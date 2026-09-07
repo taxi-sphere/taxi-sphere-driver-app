@@ -72,11 +72,19 @@ export default function MainLayout() {
     }
   }, [setServerReachable]);
 
-  // Проверять каждые 15 секунд если нет подключения
+  /**
+   * Перепроверять раз в 15 секунд, пока есть о чём беспокоиться.
+   *
+   * Условие — «была хоть одна неудача ИЛИ сервер уже помечен недоступным», а
+   * не только второе. Иначе счётчик неудач не работал бы вовсе: первая
+   * неудача заглушку не показывает, `isServerReachable` остаётся `true`,
+   * проверки прекращаются — и вторая неудача не наступает никогда, сколько бы
+   * сервер ни лежал.
+   */
   useEffect(() => {
     void checkServer();
     const interval = setInterval(() => {
-      if (!useConnectionStore.getState().isServerReachable) {
+      if (failuresRef.current > 0 || !useConnectionStore.getState().isServerReachable) {
         void checkServer();
       }
     }, 15_000);
