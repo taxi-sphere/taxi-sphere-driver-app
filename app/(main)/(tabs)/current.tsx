@@ -591,16 +591,16 @@ export default function CurrentOrderScreen() {
       onLayout={(e) => setContainerHeight(e.nativeEvent.layout.height)}
     >
       {canShowMap ? (
-        <MapErrorBoundary orderId={order.id}>
+        <MapErrorBoundary
+          orderId={order.id}
+          fallback={<MapFallback text="Карта не открылась. Адреса и кнопки ниже работают." />}
+        >
           <OrderMap order={order} fill bottomInset={collapsedHeight + actionBarHeight} />
         </MapErrorBoundary>
       ) : (
-        <View style={[styles.mapFallback, { backgroundColor: colors.mapPlaceholder }]}>
-          <Ionicons name="map-outline" size={iconTokens.xxl} color={colors.textMuted} />
-          <AppText variant="label" tone="muted" center style={styles.mapFallbackText}>
-            {mapAvailable ? 'Координаты не указаны' : EMBEDDED_MAP_UNAVAILABLE_HINT}
-          </AppText>
-        </View>
+        <MapFallback
+          text={mapAvailable ? 'Координаты не указаны' : EMBEDDED_MAP_UNAVAILABLE_HINT}
+        />
       )}
 
       {/* Плавающая строка над картой: заказ (или переключатель) и таймер */}
@@ -1073,16 +1073,48 @@ function CompletedCard({
 }
 
 /**
+ * Заглушка на месте карты — одна на все причины, по которым карты нет.
+ *
+ * Пустое место без единого слова водитель читает как поломку приложения и
+ * идёт звонить диспетчеру. Строчка о том, что заказ при этом работает,
+ * стоит дешевле звонка.
+ */
+function MapFallback({ text }: { text: string }) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+
+  return (
+    <View style={[styles.mapFallback, { backgroundColor: colors.mapPlaceholder }]}>
+      <Ionicons name="map-outline" size={iconTokens.xxl} color={colors.textMuted} />
+      <AppText variant="label" tone="muted" center style={styles.mapFallbackText}>
+        {text}
+      </AppText>
+    </View>
+  );
+}
+
+/**
  * v1.5.5: локальный ErrorBoundary для карты заказа. react-native-maps может
  * упасть на невалидных regions/coords даже несмотря на guard выше (например,
  * если сама тайл-сервисная конфигурация испортилась). Ловим краш здесь,
  * логируем в админку через driverLogger — вместо белого экрана.
+ *
+ * 1.5.40: ДВЕ правки, обе про то, что бывало после отлова.
+ * • Сброс на новом заказе. `hasError` живёт, пока жив экран, а падение
+ *   ловится на КОНКРЕТНЫХ координатах — то есть один сломанный заказ
+ *   уносил карту насовсем, до перезапуска приложения, включая все
+ *   следующие заказы и встречный.
+ * • Заглушка вместо `null`. Водитель видел пустоту ровно там, где ждал
+ *   карту, и ничего не объясняющую.
  */
-class MapErrorBoundary extends Component<
-  { children: ReactNode; orderId: string },
-  { hasError: boolean }
-> {
-  constructor(props: { children: ReactNode; orderId: string }) {
+interface MapBoundaryProps {
+  children: ReactNode;
+  orderId: string;
+  fallback: ReactNode;
+}
+
+class MapErrorBoundary extends Component<MapBoundaryProps, { hasError: boolean }> {
+  constructor(props: MapBoundaryProps) {
     super(props);
     this.state = { hasError: false };
   }
@@ -1101,8 +1133,14 @@ class MapErrorBoundary extends Component<
     });
   }
 
+  componentDidUpdate(prev: MapBoundaryProps) {
+    if (prev.orderId !== this.props.orderId && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
   render() {
-    if (this.state.hasError) return null;
+    if (this.state.hasError) return this.props.fallback;
     return this.props.children;
   }
 }
