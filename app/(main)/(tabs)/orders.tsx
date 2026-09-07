@@ -19,7 +19,7 @@
  * @dependencies: useAvailableOrders, useScheduledOrders, useOrderActions,
  *                @/components/order/OrderCard, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-01 (v1.5.17 — редизайн, предзаказы, причина пустого списка)
+ * @updated: 2026-09-07 (1.5.38 — обрыв сокета больше не прячет список заказов)
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -61,7 +61,7 @@ export default function OrdersScreen() {
   const queryClient = useQueryClient();
   const notify = useNotify();
 
-  const { data: orders, isLoading, refetch, meta, error } = useAvailableOrders();
+  const { data: orders, isLoading, refetch, meta, error, isOffline } = useAvailableOrders();
   const { accept } = useOrderActions();
   const socketStatus = useConnectionStore((s) => s.socketStatus);
   const isDisconnected = socketStatus !== 'connected';
@@ -204,95 +204,116 @@ export default function OrdersScreen() {
 
   return (
     <Screen>
-      {/* Нет связи — единственное состояние, которое перекрывает весь экран:
-          без сокета список всё равно не обновляется. */}
-      {isDisconnected ? (
-        <EmptyState
-          icon="cloud-offline-outline"
+      {/* Обрыв сокета — ПОЛОСКА, а не заглушка на весь экран.
+
+          До 1.5.38 здесь стояло `isDisconnected ? <EmptyState/> : <список>`,
+          и весь экран заказов подменялся надписью «Нет связи с сервером».
+          Это неверно по существу: сокет разносит мгновенные уведомления о
+          новых заказах, а сам СПИСОК приходит обычным опросом по HTTP и
+          прекрасно живёт без сокета. Хуже того, стартовое значение
+          `socketStatus` — `disconnected`, так что ровно так экран выглядел
+          при каждом запуске приложения до подключения сокета, и навсегда,
+          если сокет не поднялся. Водитель при живом интернете видел пустой
+          экран и не понимал, почему «нет заказов». */}
+      {/* Интернета нет вовсе — это сильнее, чем «нет сокета», и говорится
+          вместо него: две полоски про связь подряд только сбивают. */}
+      {isOffline ? (
+        <Banner
           tone="danger"
-          title="Нет связи с сервером"
-          description={`Переподключение через ${retryCountdown} с`}
-          action={{ label: 'Переподключиться', onPress: handleRetry, loading: isRetrying }}
+          icon="cloud-offline-outline"
+          text="Нет интернета. Список обновится сам, как только связь вернётся"
         />
       ) : (
-        <>
-          {/* Именно `=== false`: поле необязательное, и «не пришло» —
-              это не «GPS выключен». */}
-          {meta?.hasGps === false && (
-            <Banner
-              tone={meta.showOrdersWithoutGps ? 'warning' : 'danger'}
-              icon="navigate-circle-outline"
-              text={
-                meta.showOrdersWithoutGps
-                  ? 'GPS выключен — заказы показаны без фильтра расстояния'
-                  : 'Включите GPS, иначе заказы не приходят'
-              }
-            />
-          )}
+        isDisconnected && (
+          <Banner
+            tone="warning"
+            icon="cloud-offline-outline"
+            text={`Уведомления о новых заказах не приходят. Список обновляется сам, переподключение через ${retryCountdown} с`}
+            action={{ label: 'Сейчас', onPress: handleRetry, loading: isRetrying }}
+          />
+        )
+      )}
 
-          {listError && (
-            <Banner
-              tone="danger"
-              icon="alert-circle-outline"
-              text="Не удалось загрузить список"
-              action={{ label: 'Повторить', onPress: () => void reload() }}
-            />
-          )}
+      {/* Именно `=== false`: поле необязательное, и «не пришло» —
+          это не «GPS выключен». */}
+      {meta?.hasGps === false && (
+        <Banner
+          tone={meta.showOrdersWithoutGps ? 'warning' : 'danger'}
+          icon="navigate-circle-outline"
+          text={
+            meta.showOrdersWithoutGps
+              ? 'GPS выключен — заказы показаны без фильтра расстояния'
+              : 'Включите GPS, иначе заказы не приходят'
+          }
+        />
+      )}
 
-          {listLoading && list.length === 0 ? (
-            <View style={styles.list}>
-              <OrderCardSkeleton />
-              <OrderCardSkeleton />
-              <OrderCardSkeleton />
-            </View>
-          ) : (
-            <FlatList
-              data={list}
-              keyExtractor={(item) => item.id}
-              contentContainerStyle={[styles.list, list.length === 0 && styles.listEmpty]}
-              ListHeaderComponent={
-                // Список НЕ пустой, но брать нельзя — так бывает с горящими
-                // заказами: сервер отдаёт их в любом состоянии водителя
-                // (v1.99.69), а принять можно не всегда. Без этой строки
-                // выглядело бы как поломка: карточки есть, нажатие ничего
-                // не делает.
-                blockedMessage && list.length > 0 ? (
-                  <Surface
-                    level={1}
-                    style={[styles.blockedNote, { borderColor: colors.warning }]}
-                  >
-                    <AppText variant="caption" tone="warning">
-                      {blockedMessage}
-                    </AppText>
-                  </Surface>
-                ) : null
-              }
-              renderItem={({ item, index }) => (
-                <StaggerItem index={index}>
-                  <OrderCard
-                    order={item}
-                    onPress={handleCardPress}
-                    scheduled={false}
-                  />
-                </StaggerItem>
-              )}
-              refreshControl={
-                <RefreshControl
-                  refreshing={listLoading}
-                  onRefresh={() => void reload()}
-                  tintColor={colors.primary}
-                  colors={[colors.primary]}
-                />
-              }
-              ListEmptyComponent={
-                <AvailableEmpty
-                  blockedMessage={blockedMessage}
-                  onGoToOrder={() => router.replace('/(main)/(tabs)/current')}
-                />
-              }
-            />
+      {listError && (
+        <Banner
+          tone="danger"
+          icon="alert-circle-outline"
+          text="Не удалось загрузить список"
+          action={{ label: 'Повторить', onPress: () => void reload() }}
+        />
+      )}
+
+      {/* `!isOffline` — страховка, а не необходимость: у запроса на паузе
+          `isLoading` уже false (замерено, см. query-bridges.test.ts), так что
+          скелетоны и без неё не крутились бы вечно. Условие оставлено, чтобы
+          порядок ветвей читался однозначно: нет сети — это не «загрузка». */}
+      {listLoading && !isOffline && list.length === 0 ? (
+        <View style={styles.list}>
+          <OrderCardSkeleton />
+          <OrderCardSkeleton />
+          <OrderCardSkeleton />
+        </View>
+      ) : (
+        <FlatList
+          data={list}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={[styles.list, list.length === 0 && styles.listEmpty]}
+          ListHeaderComponent={
+            // Список НЕ пустой, но брать нельзя — так бывает с горящими
+            // заказами: сервер отдаёт их в любом состоянии водителя
+            // (v1.99.69), а принять можно не всегда. Без этой строки
+            // выглядело бы как поломка: карточки есть, нажатие ничего
+            // не делает.
+            blockedMessage && list.length > 0 ? (
+              <Surface
+                level={1}
+                style={[styles.blockedNote, { borderColor: colors.warning }]}
+              >
+                <AppText variant="caption" tone="warning">
+                  {blockedMessage}
+                </AppText>
+              </Surface>
+            ) : null
+          }
+          renderItem={({ item, index }) => (
+            <StaggerItem index={index}>
+              <OrderCard
+                order={item}
+                onPress={handleCardPress}
+                scheduled={false}
+              />
+            </StaggerItem>
           )}
-        </>
+          refreshControl={
+            <RefreshControl
+              refreshing={listLoading}
+              onRefresh={() => void reload()}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
+          }
+          ListEmptyComponent={
+            <AvailableEmpty
+              blockedMessage={blockedMessage}
+              offline={isOffline}
+              onGoToOrder={() => router.replace('/(main)/(tabs)/current')}
+            />
+          }
+        />
       )}
 
       <IncomingOrderModal
@@ -321,11 +342,27 @@ export default function OrdersScreen() {
  */
 function AvailableEmpty({
   blockedMessage,
+  offline,
   onGoToOrder,
 }: {
   blockedMessage: string | null;
+  /** Сети нет — список не пуст, его просто неоткуда взять. */
+  offline: boolean;
   onGoToOrder: () => void;
 }) {
+  // Раньше всего: «Свободных заказов нет» без интернета — прямая ложь,
+  // мы про заказы сейчас ничего не знаем.
+  if (offline) {
+    return (
+      <EmptyState
+        icon="cloud-offline-outline"
+        tone="danger"
+        title="Нет интернета"
+        description="Заказы появятся здесь сами, как только связь вернётся"
+      />
+    );
+  }
+
   if (blockedMessage) {
     return (
       <EmptyState
@@ -357,7 +394,7 @@ function Banner({
   tone: 'warning' | 'danger';
   icon: keyof typeof Ionicons.glyphMap;
   text: string;
-  action?: { label: string; onPress: () => void };
+  action?: { label: string; onPress: () => void; loading?: boolean };
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -371,7 +408,12 @@ function Banner({
         {text}
       </AppText>
       {action && (
-        <Button onPress={action.onPress} variant="ghost" size="sm">
+        <Button
+          onPress={action.onPress}
+          variant="ghost"
+          size="sm"
+          loading={action.loading}
+        >
           {action.label}
         </Button>
       )}

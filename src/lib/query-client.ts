@@ -6,7 +6,7 @@
  *   в дашборд через driverLogger (видно в админке → Водители → Логи).
  * @dependencies: @tanstack/react-query, @/services/logger.service
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-04-16 12:00:00
+ * @updated: 2026-09-07 (1.5.38 — refetchOnReconnect/onWindowFocus работают через query-bridges)
  */
 
 import { QueryClient, QueryCache, MutationCache } from '@tanstack/react-query';
@@ -28,6 +28,23 @@ export const queryClient = new QueryClient({
     },
     mutations: {
       retry: 1,
+      /**
+       * Мутации отправляются ВСЕГДА, даже когда `onlineManager` считает, что
+       * сети нет.
+       *
+       * По умолчанию (`networkMode: 'online'`) мутация без сети не падает, а
+       * ВСТАЁТ НА ПАУЗУ и выполняется при возврате связи. Для запросов это
+       * ровно то, что нужно, а для действий водителя — нет: он жмёт
+       * «Принять заказ», ничего не происходит, и через три минуты заказ
+       * принимается сам — когда его уже могли отдать другому, а водитель
+       * успел передумать. Действие должно либо пройти сейчас, либо честно
+       * не пройти, и водитель должен узнать об этом сразу.
+       *
+       * До 1.5.38 так и было — просто по случайности: `onlineManager` не был
+       * связан с NetInfo и всегда отвечал «онлайн». Связали (см.
+       * `query-bridges.ts`) — и это поведение пришлось закрепить явно.
+       */
+      networkMode: 'always',
     },
   },
   queryCache: new QueryCache({

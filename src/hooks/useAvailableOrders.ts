@@ -30,5 +30,13 @@ export function useAvailableOrders(radiusKm?: number) {
     ...query,
     data: query.data?.items,
     meta: query.data?.meta as AvailableOrdersMeta | undefined,
+    /**
+     * Запрос стоит на паузе: сети нет, React Query ждёт её возврата.
+     *
+     * Появилось вместе с мостом к NetInfo (1.5.38). Без него `isLoading`
+     * остаётся `true` бесконечно, и экран показывал бы скелетоны, пока не
+     * появится интернет, — вместо того чтобы сказать, что связи нет.
+     */
+    isOffline: query.isPaused,
   };
 }

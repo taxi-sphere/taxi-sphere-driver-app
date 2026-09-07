@@ -30,9 +30,9 @@
  *   водитель может кнопкой в правом верхнем углу.
  *
  * @dependencies: react-native-maps, expo-location, @/lib/theme,
- *   @/hooks/useOrderRoute, @/lib/map-fit
+ *   @/hooks/useOrderRoute, @/lib/map-fit, @/lib/heading
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-04 (1.5.37 — охват по событиям, кнопка общего плана)
+ * @updated: 2026-09-07 (1.5.38 — светлая карта в светлой теме, стрелка направления)
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -45,6 +45,7 @@ import { AppText } from '@/components/ui';
 import { NIGHT_MAP_STYLE } from './night-map-style';
 import { useOrderRoute } from '@/hooks/useOrderRoute';
 import { mapFitKey } from '@/lib/map-fit';
+import { bearingDegrees, distanceMeters, headingAlong, MIN_SPAN_M } from '@/lib/heading';
 import type { CurrentOrder } from '@/types/order';
 
 interface OrderMapProps {
@@ -70,6 +71,24 @@ interface OrderMapProps {
  */
 const NO_ROUTE: { latitude: number; longitude: number }[] = [];
 
+/**
+ * Дневной стиль карты — ПУСТОЙ МАССИВ, а не `undefined`.
+ *
+ * Это не косметика, а обход поведения библиотеки. `react-native-maps` 1.26
+ * на Android применяет стиль так:
+ *
+ *     if (map != null && customMapStyleString != null) {
+ *         map.setMapStyle(new MapStyleOptions(customMapStyleString));
+ *     }
+ *
+ * `null` ПРОПУСКАЕТСЯ. То есть однажды применённый ночной стиль не
+ * снимается никогда, и переключение приложения на светлую тему на карту не
+ * действовало вовсе — карта оставалась чёрной при белом интерфейсе (1.5.38).
+ * Пустой массив даёт строку `"[]"`: она не `null`, доходит до `setMapStyle`
+ * и сбрасывает карту к стандартному дневному виду.
+ */
+const DAY_MAP_STYLE: never[] = [];
+
 /** Как часто обновлять позицию водителя на карте. */
 const WATCH_INTERVAL_MS = 3000;
 const WATCH_DISTANCE_M = 10;
@@ -88,6 +107,18 @@ export function OrderMap({
     longitude: number;
   } | null>(null);
 
+  /**
+   * Куда водитель едет — по его собственному перемещению.
+   *
+   * `null`, пока машина не проехала `MIN_SPAN_M`: до этого угол между двумя
+   * фиксами — это шум приёмника, а не поворот. Раз посчитанный, угол больше
+   * не сбрасывается — стоящая машина смотрит туда же, куда ехала, как в
+   * любом навигаторе.
+   */
+  const [movementHeading, setMovementHeading] = useState<number | null>(null);
+  /** Точка, от которой отсчитывается следующий угол. */
+  const headingAnchorRef = useRef<{ latitude: number; longitude: number } | null>(null);
+
   // Отслеживание позиции водителя
   useEffect(() => {
     let subscription: Location.LocationSubscription | undefined;
@@ -103,10 +134,24 @@ export function OrderMap({
           distanceInterval: WATCH_DISTANCE_M,
         },
         (loc) => {
-          setDriverLocation({
+          const next = {
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
-          });
+          };
+
+          // Курс считаем по пройденному отрезку, а НЕ берём `loc.coords.heading`:
+          // на серверной записи трека этот курс принимал два различных значения
+          // на 356 точек — приёмник его на городских скоростях просто не считает
+          // (тот же урок, что в админке, v1.99.84).
+          const anchor = headingAnchorRef.current;
+          if (!anchor) {
+            headingAnchorRef.current = next;
+          } else if (distanceMeters(anchor, next) >= MIN_SPAN_M) {
+            setMovementHeading(bearingDegrees(anchor, next));
+            headingAnchorRef.current = next;
+          }
+
+          setDriverLocation(next);
         },
       );
     })();
@@ -123,6 +168,18 @@ export function OrderMap({
     lng: driverLocation?.longitude,
   });
   const routeCoords = route?.coordinates ?? NO_ROUTE;
+
+  /**
+   * Куда развернуть стрелку водителя.
+   *
+   * Порядок источников не случаен. Собственное перемещение — самый честный
+   * ответ на «куда он едет»: это факт, а не план. Пока машина не тронулась,
+   * его нет, и тогда берём первый отрезок линии маршрута — он построен по
+   * дорогам и начинается в точке водителя, то есть показывает, куда ехать.
+   * Нет ни того, ни другого (маршрут не построился, машина стоит) —
+   * `null`, и маркер честно рисуется без стрелки, а не наугад на север.
+   */
+  const driverHeading = movementHeading ?? headingAlong(routeCoords);
 
   // Позиция водителя в охвате нужна, но НЕ должна его перезапускать —
   // поэтому лежит в ref, а не в зависимостях эффекта. См. комментарий к
@@ -230,11 +287,17 @@ export function OrderMap({
           latitudeDelta: 0.02,
           longitudeDelta: 0.02,
         }}
-        customMapStyle={theme.isDark ? NIGHT_MAP_STYLE : undefined}
+        customMapStyle={theme.isDark ? NIGHT_MAP_STYLE : DAY_MAP_STYLE}
         showsUserLocation={false}
         showsMyLocationButton={false}
         showsCompass={false}
         toolbarEnabled={false}
+        // Карта строго «севером вверх». Стрелка водителя развёрнута
+        // трансформом внутри маркера, а он о повороте самой карты не знает —
+        // при развёрнутой карте стрелка показывала бы не туда. Наклон убран
+        // по той же причине плюс из-за случайных касаний двумя пальцами.
+        rotateEnabled={false}
+        pitchEnabled={false}
       >
         {routeCoords.length >= 2 && (
           <>
@@ -259,7 +322,7 @@ export function OrderMap({
 
         {driverLocation && (
           <Marker coordinate={driverLocation} title="Вы здесь" anchor={{ x: 0.5, y: 0.5 }}>
-            <MapPin color={theme.colors.info} icon="car-sport" ring />
+            <MapPin color={theme.colors.info} icon="car-sport" ring rotation={driverHeading} />
           </Marker>
         )}
 
@@ -329,21 +392,41 @@ export function OrderMap({
  *
  * Обводка обязательна — без неё тёмный маркер теряется на ночной карте, а
  * светлый на дневной.
+ *
+ * СТРЕЛКА НАПРАВЛЕНИЯ (1.5.38). Если задан `rotation`, вместо значка
+ * рисуется стрелка, развёрнутая по курсу. До этого маркер водителя был
+ * неподвижным кружком с машинкой: куда водитель повёрнут, карта не
+ * сообщала вовсе, и линия маршрута просто обрывалась у кружка. Крутится
+ * ТОЛЬКО стрелка внутри — сам кружок и кольцо остаются на месте, иначе
+ * обводка и подсветка «дышали» бы вместе с поворотом.
  */
 function MapPin({
   color,
   icon,
   ring = false,
+  rotation = null,
 }: {
   color: string;
   icon: keyof typeof Ionicons.glyphMap;
   ring?: boolean;
+  /** Курс в градусах (0 — на север). `null` — направление неизвестно. */
+  rotation?: number | null;
 }) {
   const theme = useTheme();
+  const hasHeading = rotation != null && Number.isFinite(rotation);
 
   return (
     <View style={[styles.pin, { backgroundColor: color, borderColor: theme.colors.surface }]}>
-      <Ionicons name={icon} size={15} color="#ffffff" />
+      {hasHeading ? (
+        <Ionicons
+          name="arrow-up"
+          size={17}
+          color="#ffffff"
+          style={{ transform: [{ rotate: `${rotation}deg` }] }}
+        />
+      ) : (
+        <Ionicons name={icon} size={15} color="#ffffff" />
+      )}
       {ring && <View style={[styles.pinRing, { borderColor: color }]} />}
     </View>
   );
