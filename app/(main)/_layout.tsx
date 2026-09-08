@@ -20,6 +20,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { getApiUrl } from '@/lib/constants';
 import { icon, radius, spacing, text, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
 import { AppText, Button, Screen , useConfirm, useNotify } from '@/components/ui';
+import { useKeepScreenOn } from '@/hooks/useKeepScreenOn';
 
 
 /** Сколько ждать ответа проверки, мс. */
@@ -29,6 +30,9 @@ const PROBE_TIMEOUT_MS = 10_000;
 const FAILURES_BEFORE_BLOCK = 2;
 
 export default function MainLayout() {
+  // Экран не гаснет, пока водитель в рабочей части приложения (1.5.42).
+  useKeepScreenOn();
+
   const isServerReachable = useConnectionStore((s) => s.isServerReachable);
   const setServerReachable = useConnectionStore((s) => s.setServerReachable);
   const [checking, setChecking] = useState(false);

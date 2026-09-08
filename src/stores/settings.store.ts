@@ -5,12 +5,13 @@
  *   Персистенция через AsyncStorage.
  * @dependencies: zustand, @react-native-async-storage/async-storage
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-01 (v1.5.19 — keepScreenOn)
+ * @updated: 2026-09-08 (1.5.42 — ориентация карты)
  */
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { MapOrientation } from '@/lib/map-orientation';
 
 type NavigatorApp = 'yandex' | '2gis' | 'google';
 type ThemeMode = 'light' | 'dark' | 'system';
@@ -40,6 +41,18 @@ interface SettingsState {
    * дефиците — экран самый прожорливый потребитель в приложении.
    */
   keepScreenOn: boolean;
+  /**
+   * 1.5.42: как повёрнута карта заказа.
+   *
+   * `course` — по курсу, как в навигаторе: дорога впереди всегда вверху,
+   * стрелка водителя смотрит вверх. `north` — север сверху, как было до
+   * 1.5.42: удобнее для обзора обстановки, но требует держать в голове,
+   * куда сейчас едешь.
+   *
+   * По умолчанию `course`: встроенная карта чаще нужна на ходу, а не для
+   * разглядывания района.
+   */
+  mapOrientation: MapOrientation;
 
   setServerUrl: (url: string) => void;
   setSoundEnabled: (enabled: boolean) => void;
@@ -50,6 +63,7 @@ interface SettingsState {
   setLastPhone: (phone: string) => void;
   setBetaChannel: (enabled: boolean) => void;
   setKeepScreenOn: (enabled: boolean) => void;
+  setMapOrientation: (orientation: MapOrientation) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -64,6 +78,7 @@ export const useSettingsStore = create<SettingsState>()(
       lastPhone: '',
       betaChannel: false,
       keepScreenOn: true,
+      mapOrientation: 'course',
 
       setServerUrl: (serverUrl) => set({ serverUrl }),
       setSoundEnabled: (soundEnabled) => set({ soundEnabled }),
@@ -75,6 +90,7 @@ export const useSettingsStore = create<SettingsState>()(
       setLastPhone: (lastPhone) => set({ lastPhone }),
       setBetaChannel: (betaChannel) => set({ betaChannel }),
       setKeepScreenOn: (keepScreenOn) => set({ keepScreenOn }),
+      setMapOrientation: (mapOrientation) => set({ mapOrientation }),
     }),
     {
       name: 'ts-driver-settings',

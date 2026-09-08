@@ -35,11 +35,16 @@
  *   стояла там, куда её положил GPS, — во дворе, на соседнем доме, — а
  *   линия маршрута шла рядом сама по себе и никуда от водителя не вела.
  *
+ *   ОРИЕНТАЦИЯ КАРТЫ (1.5.42). Водитель выбирает в настройках: «по курсу»
+ *   (дорога впереди вверху, как в навигаторе) или «север сверху». Правило
+ *   и компенсация угла стрелки — в `@/lib/map-orientation`, там же
+ *   объяснено, почему до 1.5.42 карта была жёстко севером вверх.
+ *
  * @dependencies: react-native-maps, react-native-svg, expo-location,
  *   @/lib/theme, @/hooks/useOrderRoute, @/lib/map-fit, @/lib/heading,
- *   @/lib/route-snap
+ *   @/lib/route-snap, @/lib/map-orientation, @/stores/settings.store
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-07 (1.5.39 — машина на дороге, стрелка как в админке)
+ * @updated: 2026-09-08 (1.5.42 — режимы ориентации карты)
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -49,13 +54,21 @@ import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { radius, useTheme } from '@/lib/theme';
 import { AppText } from '@/components/ui';
-import Svg, { G, Path } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 import { NIGHT_MAP_STYLE } from './night-map-style';
 import { DAY_MAP_STYLE } from './day-map-style';
 import { useOrderRoute } from '@/hooks/useOrderRoute';
 import { mapFitKey } from '@/lib/map-fit';
 import { bearingDegrees, distanceMeters, headingAlong, MIN_SPAN_M } from '@/lib/heading';
 import { routeAhead, snapToRoute } from '@/lib/route-snap';
+import {
+  angleDelta,
+  RESUME_COURSE_UP_M,
+  screenHeading,
+  shouldTurnCamera,
+  targetCameraHeading,
+} from '@/lib/map-orientation';
+import { useSettingsStore } from '@/stores/settings.store';
 import type { CurrentOrder } from '@/types/order';
 
 interface OrderMapProps {
@@ -84,29 +97,16 @@ const NO_ROUTE: { latitude: number; longitude: number }[] = [];
 /** Размер стрелки водителя на экране. */
 const ARROW_SIZE = 36;
 
-/** Сколько маркеру водителя разрешено перерисовываться после смены курса. */
-const TRACK_WINDOW_MS = 1000;
 
 /**
- * Разрешать маркеру перерисовку окном, а не постоянно.
+ * Сколько длится доворот камеры.
  *
- * Android рисует собственную разметку маркера в растр и обновляет её,
- * только пока `tracksViewChanges` истинно. Держать истинным всегда —
- * перерисовывать стрелку на каждом кадре карты и сажать батарею; выключить
- * навсегда — маркер застывает пустым квадратом, это известная беда
- * библиотеки. Секунда после каждой смены курса закрывает обе.
+ * Мгновенный поворот читается как рывок и сбивает с толку; долгий —
+ * отстаёт от машины в повороте. Треть секунды — примерно столько же, что
+ * и у штатных навигаторов.
  */
-function useTracksViewChanges(value: unknown): boolean {
-  const [tracks, setTracks] = useState(true);
+const CAMERA_TURN_MS = 300;
 
-  useEffect(() => {
-    setTracks(true);
-    const id = setTimeout(() => setTracks(false), TRACK_WINDOW_MS);
-    return () => clearTimeout(id);
-  }, [value]);
-
-  return tracks;
-}
 
 /** Как часто обновлять позицию водителя на карте. */
 const WATCH_INTERVAL_MS = 3000;
@@ -121,6 +121,7 @@ export function OrderMap({
 }: OrderMapProps) {
   const mapRef = useRef<MapView>(null);
   const theme = useTheme();
+  const mapOrientation = useSettingsStore((s) => s.mapOrientation);
   const [driverLocation, setDriverLocation] = useState<{
     latitude: number;
     longitude: number;
@@ -222,7 +223,32 @@ export function OrderMap({
    */
   const lineCoords = useMemo(() => routeAhead(routeCoords, snap), [routeCoords, snap]);
 
-  const tracksDriver = useTracksViewChanges(driverHeading);
+  /**
+   * Куда сейчас повёрнута камера. Ведём сами, а не спрашиваем карту:
+   * поворот задаём только мы (жесты поворота выключены), а `getCamera()`
+   * — асинхронный запрос за значением, которое и так известно.
+   */
+  const [cameraHeading, setCameraHeading] = useState(0);
+
+  /**
+   * Откуда водитель попросил общий план.
+   *
+   * Кнопка разворачивает карту севером вверх, и держать этот вид надо,
+   * пока водитель на него смотрит. Возвращаем поворот, когда он поехал
+   * дальше — по пройденному расстоянию, а не по времени: стоящий в пробке
+   * не должен терять обзор через десять секунд.
+   */
+  const overviewFromRef = useRef<{ latitude: number; longitude: number } | null>(null);
+
+
+  /**
+   * Угол стрелки НА ЭКРАНЕ: курс минус поворот карты. В режиме «по курсу»
+   * камера довёрнута под машину, и стрелка смотрит вверх; в режиме «север
+   * сверху» — по курсу, как было до 1.5.42.
+   */
+  const hasHeading = driverHeading != null;
+  const arrowHeading = hasHeading ? screenHeading(driverHeading, cameraHeading) : 0;
+
 
   // Позиция водителя в охвате нужна, но НЕ должна его перезапускать —
   // поэтому лежит в ref, а не в зависимостях эффекта. См. комментарий к
@@ -230,8 +256,26 @@ export function OrderMap({
   const driverLocationRef = useRef(driverLocation);
   driverLocationRef.current = driverLocation;
 
-  /** Подогнать карту так, чтобы влезли все точки и линия маршрута. */
-  const fitAll = useCallback(() => {
+  /**
+   * Подогнать карту так, чтобы влезли все точки и линия маршрута.
+   *
+   * ПОВОРОТ ЗДЕСЬ НЕ ТРОГАЕМ, И ПО УМОЛЧАНИЮ НЕ АНИМИРУЕМ. У камеры два
+   * хозяина — эта подгонка и доворот по курсу, — и на Android второй
+   * обрывает анимацию первого: `animateCamera` отменяет незаконченный
+   * `fitToCoordinates`, и карта застывает там, где её застали. Выглядит
+   * это не как рывок, а как «маршрут вообще не строится»: линия и стрелка
+   * остаются за краем экрана, потому что охват так и не доехал. Поймано на
+   * эмуляторе 08.09.2026; оба события приходят одним коммитом, когда
+   * появляется позиция водителя, так что разойтись сами они не могут.
+   *
+   * Мгновенную подгонку прерывать нечего — гонки нет вовсе. Анимация
+   * остаётся кнопке общего плана: там доворот и так заглушён, пока
+   * водитель не поехал дальше.
+   *
+   * Севером вверх обзор разворачивает тоже только кнопка
+   * (`handleOverview`).
+   */
+  const fitAll = useCallback((animated = false) => {
     if (!mapRef.current) return;
 
     const coords: { latitude: number; longitude: number }[] = [];
@@ -257,14 +301,13 @@ export function OrderMap({
         // Снизу отступ больше на высоту шторки: иначе точка назначения
         // оказывается ровно под ней.
         edgePadding: { top: 80, right: 56, bottom: 56 + bottomInset, left: 56 },
-        animated: true,
+        animated,
       });
     } else if (coords.length === 1) {
-      mapRef.current.animateToRegion({
-        ...coords[0],
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      });
+      mapRef.current.animateToRegion(
+        { ...coords[0], latitudeDelta: 0.01, longitudeDelta: 0.01 },
+        animated ? 500 : 0,
+      );
     }
   }, [
     order.pickupLat,
@@ -294,6 +337,65 @@ export function OrderMap({
     // маршруте, и эффект снова стал бы срабатывать на движение.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fitKey]);
+
+  /**
+   * Доворот камеры под курс.
+   *
+   * Порог обязателен: курс шумит, и без него карта мелко трясётся на
+   * каждом фиксе GPS. В режиме «север сверху» доворачивать нечего — просто
+   * возвращаем ноль, если он был сбит.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    // Пока водитель смотрит общий план — не отнимать его поворотом.
+    const overviewFrom = overviewFromRef.current;
+    if (overviewFrom) {
+      if (!driverPoint || distanceMeters(overviewFrom, driverPoint) < RESUME_COURSE_UP_M) {
+        return;
+      }
+      overviewFromRef.current = null;
+    }
+
+    const needTurn =
+      mapOrientation === 'course'
+        ? shouldTurnCamera(cameraHeading, driverHeading)
+        : Math.abs(angleDelta(cameraHeading, 0)) > 0.5;
+    if (!needTurn) return;
+
+    const target = targetCameraHeading(mapOrientation, driverHeading);
+    map.animateCamera({ heading: target }, { duration: CAMERA_TURN_MS });
+    setCameraHeading(target);
+  }, [mapOrientation, driverHeading, cameraHeading, driverPoint]);
+
+  /**
+   * Кнопка «показать весь маршрут».
+   *
+   * Обзор всегда севером вверх: повёрнутый общий план нечитаем — на нём не
+   * понять, где север и куда тянется маршрут, а именно за этим на него и
+   * смотрят. Порядок важен: сначала МГНОВЕННЫЙ сброс поворота, потом
+   * подгонка охвата. Иначе охват посчитан под один угол, а показан под
+   * другим, и часть маршрута уезжает за край.
+   *
+   * Мгновенно — это метод `setCamera`: он уходит командой в
+   * `animateToCamera(camera, 0)`, который достраивает недостающие поля из
+   * текущей позиции карты и двигает её без анимации. `animateCamera` с
+   * нулевой длительностью не подошёл бы: JS-обёртка библиотеки проверяет
+   * длительность на истинность (`opts?.duration ? opts.duration : 500`), и
+   * ноль молча превращается в полсекунды анимации. (И не путать с ПРОПОМ
+   * `camera`: одноимённый нативный сеттер собирает позицию С НУЛЯ, так что
+   * частичное значение отправило бы карту в точку (0, 0).)
+   *
+   * Запоминаем и место: пока водитель не проехал `RESUME_COURSE_UP_M`,
+   * карта держит общий план и не разворачивается обратно по курсу.
+   */
+  const handleOverview = useCallback(() => {
+    overviewFromRef.current = driverLocationRef.current;
+    mapRef.current?.setCamera({ heading: 0 });
+    setCameraHeading(0);
+    fitAll(true);
+  }, [fitAll]);
 
   const hasPickup = order.pickupLat != null && order.pickupLng != null;
   const hasDropoff = order.dropoffLat != null && order.dropoffLng != null;
@@ -335,10 +437,10 @@ export function OrderMap({
         showsMyLocationButton={false}
         showsCompass={false}
         toolbarEnabled={false}
-        // Карта строго «севером вверх». Стрелка водителя развёрнута
-        // трансформом внутри маркера, а он о повороте самой карты не знает —
-        // при развёрнутой карте стрелка показывала бы не туда. Наклон убран
-        // по той же причине плюс из-за случайных касаний двумя пальцами.
+        // Поворот пальцами выключен в ОБОИХ режимах: камерой управляет
+        // приложение, и жест тянул бы её в другую сторону — водитель
+        // крутил бы карту, а она возвращалась. Наклон убран отдельно:
+        // случайные касания двумя пальцами кладут карту набок.
         rotateEnabled={false}
         pitchEnabled={false}
       >
@@ -368,15 +470,33 @@ export function OrderMap({
             coordinate={driverPoint}
             title="Вы здесь"
             anchor={{ x: 0.5, y: 0.5 }}
-            // Маркер со своей разметкой Android перерисовывает только пока
-            // это разрешено. Держать разрешение всегда — рисовать стрелку
-            // каждый кадр карты; выключить сразу — получить пустой квадрат
-            // вместо неё. Поэтому окно на секунду после смены курса.
-            tracksViewChanges={tracksDriver}
+            // Поворот — НАТИВНЫМ пропом, а не внутри разметки маркера.
+            //
+            // Разметку Android рисует в растр и обновляет, только пока
+            // открыто окно `tracksViewChanges`. Угол же меняется когда
+            // угодно — и 08.09.2026 на эмуляторе стрелка так и осталась
+            // повёрнутой на прежние 327°, хотя в состоянии уже стоял ноль:
+            // окно к тому моменту закрылось. Ошибка не видна ниоткуда,
+            // кроме самой картинки. Нативный поворот растра не касается.
+            //
+            // Угол ЭКРАННЫЙ: маркер со своей разметкой остаётся билбордом
+            // и о повороте карты не знает, поэтому её разворот вычтен в
+            // `screenHeading`. (`flat`, у которого Google считает угол от
+            // севера карты, на таком маркере не действует — проверено.)
+            rotation={arrowHeading}
+            // `tracksViewChanges` НЕ выключаем — и это осознанно.
+            //
+            // Выключенным он экономит перерисовку растра, но ценой того,
+            // что маркер перестаёт обновляться в непредсказуемый момент:
+            // 08.09.2026 на эмуляторе стрелка сперва застыла повёрнутой на
+            // прежний угол, а потом и вовсе пропала при возврате из
+            // настроек. Обе поломки невидимы ниоткуда, кроме самой
+            // картинки. Разметка тут — один значок 36×36, а остальные метки
+            // на этой же карте и так живут со значением по умолчанию.
           >
             {/* Цвет НЕ тот, что у линии маршрута: одинаковый синий сливался
                 бы со своей же линией, и стрелку приходилось бы искать. */}
-            <DriverArrow color={theme.colors.primary} heading={driverHeading} />
+            <DriverArrow color={theme.colors.primary} hasHeading={hasHeading} />
           </Marker>
         )}
 
@@ -422,7 +542,7 @@ export function OrderMap({
           решение водителя. Справа сверху — слева над картой стоят вкладки
           «Текущий / Встречный». */}
       <Pressable
-        onPress={fitAll}
+        onPress={handleOverview}
         accessibilityRole="button"
         accessibilityLabel="Показать весь маршрут"
         hitSlop={8}
@@ -454,13 +574,11 @@ export function OrderMap({
  * Без курса рисуется точка с обводкой — как «вы здесь» в картах, когда
  * направление неизвестно. Стрелка наугад на север врала бы.
  *
- * Вращение делает сам SVG вокруг центра холста: угол попадает в разметку
- * маркера, а не в трансформ снаружи, поэтому Android перерисовывает его
- * вместе с маркером и стрелка не отстаёт от поворота.
+ * Сам шеврон всегда нарисован «вверх»: за угол отвечает карта (`flat` +
+ * `rotation` у маркера), а не эта разметка.
  */
-function DriverArrow({ color, heading }: { color: string; heading: number | null }) {
+function DriverArrow({ color, hasHeading }: { color: string; hasHeading: boolean }) {
   const theme = useTheme();
-  const hasHeading = heading != null && Number.isFinite(heading);
 
   if (!hasHeading) {
     return (
@@ -475,15 +593,13 @@ function DriverArrow({ color, heading }: { color: string; heading: number | null
   return (
     <View style={styles.arrow}>
       <Svg width={ARROW_SIZE} height={ARROW_SIZE} viewBox="0 0 32 32">
-        <G rotation={heading} originX={16} originY={16}>
-          <Path
-            d="M16 2 L24 27 L16 21 L8 27 Z"
-            fill={color}
-            stroke={theme.colors.surface}
-            strokeWidth={1.5}
-            strokeLinejoin="round"
-          />
-        </G>
+        <Path
+          d="M16 2 L24 27 L16 21 L8 27 Z"
+          fill={color}
+          stroke={theme.colors.surface}
+          strokeWidth={1.5}
+          strokeLinejoin="round"
+        />
       </Svg>
     </View>
   );

@@ -59,6 +59,18 @@ const NAVIGATORS: { value: NavigatorApp; label: string }[] = [
   { value: 'google', label: 'Google Maps' },
 ];
 
+/**
+ * Как повёрнута карта заказа.
+ *
+ * «Авто» здесь нет намеренно: разворачивать карту туда-сюда на каждой
+ * остановке — верный способ сбить водителя с толку. Два честных режима,
+ * между которыми он выбирает сам.
+ */
+const MAP_ORIENTATIONS = [
+  { value: 'course', label: 'По курсу', icon: 'navigate-outline' },
+  { value: 'north', label: 'Север сверху', icon: 'compass-outline' },
+] as const;
+
 /** Варианты темы — подпись и значок для каждого. */
 const THEME_MODES = [
   { value: 'system', label: 'Авто', icon: 'phone-portrait-outline' },
@@ -79,6 +91,8 @@ export default function SettingsScreen() {
     preferredNavigator,
     themeMode,
     betaChannel,
+    keepScreenOn,
+    mapOrientation,
     setServerUrl,
     setSoundEnabled,
     setVibrationEnabled,
@@ -86,6 +100,8 @@ export default function SettingsScreen() {
     setPreferredNavigator,
     setThemeMode,
     setBetaChannel,
+    setKeepScreenOn,
+    setMapOrientation,
   } = useSettingsStore();
 
   const { channel, latest, hasUpdate, checking, refresh } = useAppUpdate();
@@ -218,6 +234,60 @@ export default function SettingsScreen() {
               );
             })}
           </View>
+        </Section>
+
+        <Section title="Карта">
+          <View style={styles.themeRow}>
+            {MAP_ORIENTATIONS.map((mode) => {
+              const active = mapOrientation === mode.value;
+              return (
+                <Pressable
+                  key={mode.value}
+                  style={[
+                    styles.themeButton,
+                    {
+                      borderColor: active ? colors.primary : colors.border,
+                      backgroundColor: active ? colors.primarySoft : 'transparent',
+                    },
+                  ]}
+                  onPress={() => {
+                    haptics.tap();
+                    setMapOrientation(mode.value);
+                  }}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={`Карта: ${mode.label}`}
+                >
+                  <Ionicons
+                    name={mode.icon}
+                    size={iconTokens.md}
+                    color={active ? colors.primary : colors.textMuted}
+                  />
+                  <AppText
+                    variant="label"
+                    weight={active ? '700' : '500'}
+                    tone={active ? 'brand' : 'muted'}
+                  >
+                    {mode.label}
+                  </AppText>
+                </Pressable>
+              );
+            })}
+          </View>
+          <AppText variant="caption" tone="muted" style={styles.sectionHint}>
+            {mapOrientation === 'course'
+              ? 'Карта разворачивается по движению: дорога впереди всегда вверху, стрелка смотрит вверх.'
+              : 'Север всегда сверху. Стрелка показывает, куда вы едете.'}
+          </AppText>
+        </Section>
+
+        <Section title="Экран">
+          <SettingSwitch
+            label="Не гасить экран"
+            hint="Пока приложение открыто, экран не уходит в сон. Выключите, если бережёте заряд."
+            value={keepScreenOn}
+            onValueChange={setKeepScreenOn}
+          />
         </Section>
 
         <Section title="Навигатор">
@@ -397,6 +467,12 @@ const createStyles = (t: Theme) =>
     rowText: { flex: 1, gap: 2 },
 
     themeRow: { flexDirection: 'row', gap: spacing.sm, padding: spacing.md },
+    // Подпись объясняет выбранный режим словами — иконки на кнопках
+    // сами по себе не говорят, что произойдёт с картой.
+    sectionHint: {
+      paddingHorizontal: spacing.md,
+      paddingBottom: spacing.md,
+    },
     themeButton: {
       flex: 1,
       alignItems: 'center',
