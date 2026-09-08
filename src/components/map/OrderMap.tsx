@@ -40,7 +40,7 @@
  *   и компенсация угла стрелки — в `@/lib/map-orientation`, там же
  *   объяснено, почему до 1.5.42 карта была жёстко севером вверх.
  *
- * @dependencies: react-native-maps, react-native-svg, expo-location,
+ * @dependencies: react-native-maps, react-native-svg, expo-location, expo-router,
  *   @/lib/theme, @/hooks/useOrderRoute, @/lib/map-fit, @/lib/heading,
  *   @/lib/route-snap, @/lib/map-orientation, @/stores/settings.store
  * @created: 2026-03-12 18:00:00
@@ -51,6 +51,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
+import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { radius, useTheme } from '@/lib/theme';
 import { AppText } from '@/components/ui';
@@ -122,6 +123,23 @@ export function OrderMap({
   const mapRef = useRef<MapView>(null);
   const theme = useTheme();
   const mapOrientation = useSettingsStore((s) => s.mapOrientation);
+
+  /**
+   * Поколение меток: меняется каждый раз, когда экран получает фокус.
+   *
+   * ЗАЧЕМ. Метку со своей разметкой Android держит растром, и после ухода
+   * с экрана и возврата растр теряется: на карте остаётся одна линия
+   * маршрута, а подача, назначение и машина исчезают. Водитель видит
+   * маршрут «ниоткуда в никуда» — и это не наша регрессия: то же самое
+   * воспроизведено на пересобранной 1.5.41, где пропадают все три метки.
+   * Ключ, зависящий от поколения, заставляет создать их заново.
+   */
+  const [markerEpoch, setMarkerEpoch] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      setMarkerEpoch((n) => n + 1);
+    }, []),
+  );
   const [driverLocation, setDriverLocation] = useState<{
     latitude: number;
     longitude: number;
@@ -467,6 +485,7 @@ export function OrderMap({
 
         {driverPoint && (
           <Marker
+            key={`driver-${markerEpoch}`}
             coordinate={driverPoint}
             title="Вы здесь"
             anchor={{ x: 0.5, y: 0.5 }}
@@ -502,6 +521,7 @@ export function OrderMap({
 
         {hasPickup && (
           <Marker
+            key={`pickup-${markerEpoch}`}
             coordinate={{ latitude: order.pickupLat!, longitude: order.pickupLng! }}
             title="Подача"
             description={order.pickupAddress}
@@ -514,7 +534,7 @@ export function OrderMap({
         {order.stops?.map((stop, i) =>
           stop.lat && stop.lng ? (
             <Marker
-              key={`stop-${i}`}
+              key={`stop-${i}-${markerEpoch}`}
               coordinate={{ latitude: stop.lat, longitude: stop.lng }}
               title={`Остановка ${i + 1}`}
               description={stop.address}
@@ -527,6 +547,7 @@ export function OrderMap({
 
         {hasDropoff && (
           <Marker
+            key={`dropoff-${markerEpoch}`}
             coordinate={{ latitude: order.dropoffLat!, longitude: order.dropoffLng! }}
             title="Назначение"
             description={order.dropoffAddress || ''}
