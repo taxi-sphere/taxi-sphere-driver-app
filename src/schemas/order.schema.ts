@@ -12,11 +12,58 @@ import { z } from 'zod';
 const paymentMethodSchema = z.enum(['cash', 'card', 'bonus']).nullable();
 
 const orderStopSchema = z.object({
+  /**
+   * Идентификатор точки и отметка о прохождении — сервер v1.100.2+.
+   *
+   * `nullish` + default: сборки приложения живут дольше сервера, и на
+   * старом этих полей нет. Без них приложение просто не ведёт по точкам —
+   * кнопка сразу предлагает завершить поездку, как было раньше.
+   */
+  id: z.string().nullish().default(null),
   address: z.string(),
   lat: z.number().nullable(),
   lng: z.number().nullable(),
   entrance: z.string().nullable(),
   note: z.string().nullable(),
+  arrivedAt: z.string().nullish().default(null),
+});
+
+/**
+ * Показания счётчика — сервер v1.100.2+.
+ *
+ * Сумму считает СЕРВЕР по тарифу: тариф на телефоне подставной, и число,
+ * посчитанное здесь, разошлось бы с тем, что спишется у клиента.
+ */
+const orderMeterSchema = z.object({
+  distanceM: z.number(),
+  movingSec: z.number(),
+  waitingSec: z.number(),
+  waitingOn: z.boolean(),
+  chargeableWaitingSec: z.number(),
+  // Условия ожидания и начисленное за него. `nullish` + default: у сервера
+  // старше v1.100.3 этих полей нет, и строгое поле отбраковало бы весь ответ.
+  // `transform`, а не `default`: `default` подставляет значение только
+  // вместо `undefined`, а `null` пропускает дальше — и тип поля остаётся
+  // `number | null`, из-за чего на экране пришлось бы городить проверки на
+  // каждое обращение. Здесь оба случая схлопываются в ноль сразу.
+  waitingCost: z.number().nullish().transform((v) => v ?? 0),
+  waitingFreeSec: z.number().nullish().transform((v) => v ?? 0),
+  waitingPerMinute: z.number().nullish().transform((v) => v ?? 0),
+  /**
+   * Как пробег разложился по зонам — сервер v1.100.5+.
+   *
+   * `nullish` + default: на сервере старше поля нет, и строгая схема
+   * отбраковала бы весь ответ вместе со счётчиком.
+   */
+  zones: z
+    .object({
+      cityKm: z.number(),
+      settlementKm: z.number(),
+      intercityKm: z.number(),
+    })
+    .nullish()
+    .default(null),
+  total: z.number(),
 });
 
 /**
@@ -172,6 +219,9 @@ export const currentOrderSchema = z.object({
   // default([]) — защита от отсутствия поля в ответе сервера
   stops: z.array(orderStopSchema).default([]),
   options: z.array(orderOptionSchema).default([]),
+  // Счётчик: `nullish` — у сервера старше v1.100.2 его нет, и строка «на
+  // счётчике» на экране просто не появляется.
+  meter: orderMeterSchema.nullish().default(null),
 });
 
 /**

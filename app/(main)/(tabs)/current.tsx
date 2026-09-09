@@ -62,6 +62,7 @@ import {
 import {
   ActivityIndicator,
   Linking,
+  Pressable,
   ScrollView,
   StyleSheet,
   View,
@@ -70,7 +71,17 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { useActiveOrders, activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
-import { releaseOrder } from '@/api/orders.api';
+import { useAvailableOrders } from '@/hooks/useAvailableOrders';
+import { arriveStop, releaseOrder, setWaiting } from '@/api/orders.api';
+import { nextPendingStop, stopActionLabel } from '@/lib/order-stop-progress';
+import { rideCostOf } from '@/lib/trip-receipt';
+import {
+  waitingHint,
+  waitingTermsText,
+  formatWaitClock,
+  liveWaitingSec,
+} from '@/lib/waiting-hint';
+import { finishMeter, setMeterOrder } from '@/services/trip-meter.service';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useSettingsStore } from '@/stores/settings.store';
 import { driverLogger } from '@/services/logger.service';
@@ -80,11 +91,9 @@ import {
   formatDistance,
   formatDuration,
   formatTime,
-  formatTimer,
   shortenStreetType,
   splitAddressEntrance,
 } from '@/lib/utils';
-import { ORDER_COMPLETE_REDIRECT_MS } from '@/lib/constants';
 import { isEmbeddedMapAvailable, EMBEDDED_MAP_UNAVAILABLE_HINT } from '@/lib/map-availability';
 import {
   icon as iconTokens,
@@ -149,6 +158,57 @@ const LONG_ADDRESS_CHARS = 30;
 const HEADER_ACTION_SIZE = 36;
 /** Панель главного действия под шторкой. */
 const ACTION_BAR_HEIGHT = touch.primary + spacing.lg * 2;
+/**
+ * Отступ справа для полосы поверх карты.
+ *
+ * В правом верхнем углу карты стоят её собственные кнопки — «общий план» и
+ * «на себя», 40 pt при отступе 12 (`OrderMap`). Плашка с суммой обязана
+ * кончаться раньше: иначе строка ожидания при длинном тексте уезжает под
+ * кнопку и читается наполовину.
+ */
+const MAP_BUTTONS_INSET = 12 + 40 + spacing.md;
+
+/**
+ * Строка чека: за что слева, сколько справа.
+ *
+ * Отдельным компонентом, а не разметкой на месте: строк четыре, и
+ * скопированные они разъезжаются — выравнивание сумм по правому краю живо
+ * ровно до первой правки одной из копий.
+ *
+ * Стили берёт сам: `useThemedStyles` кэширует их по фабрике и теме, так что
+ * вызов здесь ничего не стоит, а проброс `styles` пропом загромождал бы
+ * каждое место применения.
+ */
+function FareRow({
+  label,
+  value,
+  strong = false,
+}: {
+  label: string;
+  value: string;
+  /** Итоговая строка — крупнее и жирнее остальных. */
+  strong?: boolean;
+}) {
+  const styles = useThemedStyles(createStyles);
+  return (
+    <View style={styles.fareRow}>
+      <AppText
+        variant={strong ? 'label' : 'caption'}
+        style={styles.fareLabel}
+        numberOfLines={2}
+      >
+        {label}
+      </AppText>
+      <AppText
+        variant={strong ? 'label' : 'caption'}
+        style={strong ? styles.fareValueStrong : styles.fareValue}
+      >
+        {value}
+      </AppText>
+    </View>
+  );
+}
+
 /** Что водитель делает на каждом этапе. */
 const ACTION_BY_STATUS: Partial<
   Record<OrderStatus, { label: string; confirmTitle: string; confirmBody: string; confirm: string }>
@@ -175,7 +235,7 @@ const ACTION_BY_STATUS: Partial<
 
 export default function CurrentOrderScreen() {
   const router = useRouter();
-  const { data: orders, isLoading, error, refetch } = useActiveOrders();
+  const { data: orders, isLoading, error, refetch, dataUpdatedAt } = useActiveOrders();
   const isNetworkOnline = useConnectionStore((s) => s.isNetworkOnline);
 
   /**
@@ -190,6 +250,23 @@ export default function CurrentOrderScreen() {
     if (!orders || orders.length === 0) return null;
     return orders.find((o) => o.id === selectedId) ?? orders[0];
   }, [orders, selectedId]);
+  /**
+   * Какому заказу принадлежит счётчик пробега.
+   *
+   * ТОЛЬКО `in_progress`: подача не оплачивается, и мотать на неё метры
+   * значило бы брать с клиента за дорогу к нему. Берётся из ВСЕГО списка
+   * активных заказов, а не из открытого: водитель может смотреть карточку
+   * встречного заказа, продолжая везти первого, — счётчик обязан идти по
+   * тому, кто в машине.
+   */
+  const meteredOrderId = useMemo(
+    () => orders?.find((o) => o.status === 'in_progress')?.id ?? null,
+    [orders],
+  );
+  useEffect(() => {
+    void setMeterOrder(meteredOrderId);
+  }, [meteredOrderId]);
+
   const { arrive, start, complete } = useOrderActions();
   const preferredNavigator = useSettingsStore((s) => s.preferredNavigator);
   const { colors } = useTheme();
@@ -216,9 +293,19 @@ export default function CurrentOrderScreen() {
   const confirm = useConfirm();
   const notify = useNotify();
 
-  // Таймер ожидания клиента (driver_arrived)
-  const [waitingSeconds, setWaitingSeconds] = useState(0);
-  const waitingTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  /**
+   * «Сейчас» с точностью до секунды — чтобы таймер ожидания шёл ровно.
+   *
+   * Само ожидание считает СЕРВЕР, и его ответ приходит раз в десять секунд:
+   * показанный прямо из ответа таймер стоял бы по десять секунд и прыгал
+   * через десять. Здесь только дорисовывается прошедшее с момента ответа
+   * (`liveWaitingSec`), а число, от которого идёт отсчёт, всегда серверное.
+   *
+   * До 1.5.48 таймер считался целиком на телефоне от нуля и только в статусе
+   * `driver_arrived`: он начинался заново при каждом возвращении на экран, а
+   * ожидание, включённое в поездке, не показывалось вовсе.
+   */
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   /**
    * Что показать после завершения заказа.
@@ -228,8 +315,10 @@ export default function CurrentOrderScreen() {
    * же момент.
    */
   const [completed, setCompleted] = useState<{ price: number | null } | null>(null);
-  const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
-
+  /** Идёт отметка промежуточной точки — блокирует главную кнопку. */
+  const [markingStop, setMarkingStop] = useState(false);
+  /** Идёт переключение ожидания. */
+  const [switchingWaiting, setSwitchingWaiting] = useState(false);
   /**
    * Адреса точек в порядке отрисовки.
    *
@@ -254,21 +343,15 @@ export default function CurrentOrderScreen() {
     };
   }, [order]);
 
-  // Управление таймером ожидания
+  // Тикаем только пока ожидание идёт: в остальное время секунды на экране
+  // не меняются, и будить отрисовку раз в секунду незачем.
+  const waitingRunning = order?.meter?.waitingOn ?? false;
   useEffect(() => {
-    if (order?.status === 'driver_arrived') {
-      setWaitingSeconds(0);
-      waitingTimer.current = setInterval(() => {
-        setWaitingSeconds((prev) => prev + 1);
-      }, 1000);
-    } else if (waitingTimer.current) {
-      clearInterval(waitingTimer.current);
-      waitingTimer.current = null;
-    }
-    return () => {
-      if (waitingTimer.current) clearInterval(waitingTimer.current);
-    };
-  }, [order?.status]);
+    if (!waitingRunning) return;
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [waitingRunning]);
 
   /**
    * Последний известный список активных заказов — для момента после
@@ -279,40 +362,27 @@ export default function CurrentOrderScreen() {
   const ordersRef = useRef<CurrentOrder[] | undefined>(undefined);
   ordersRef.current = orders;
 
-  // Куда уходим после завершения заказа
-  useEffect(() => {
-    if (!completed) {
-      setRedirectCountdown(null);
-      return;
+  /**
+   * Уйти с карточки «Заказ завершён» — ПО НАЖАТИЮ, а не по таймеру.
+   *
+   * До 1.5.49 отсюда уводил обратный отсчёт в 5 секунд: водителя не
+   * спрашивали. Пять секунд — это ровно столько, чтобы не успеть прочитать
+   * сумму, а если в этот момент говоришь с клиентом — экран уезжает сам, и
+   * вернуться к нему уже нельзя: завершённого заказа в ответе сервера нет.
+   *
+   * 1.5.23: остался встречный заказ — открываем ЕГО, а не список свободных.
+   * Водитель со вторым заказом в работе, выброшенный на экран свободных
+   * заказов, ищет своего клиента вручную, пока тот сидит в машине.
+   */
+  const handleCompletedDone = useCallback(() => {
+    setCompleted(null);
+    const remaining = ordersRef.current ?? [];
+    if (remaining.length > 0 && remaining[0]) {
+      setSelectedId(remaining[0].id);
+    } else {
+      router.replace('/(main)/(tabs)/orders');
     }
-    const seconds = ORDER_COMPLETE_REDIRECT_MS / 1000;
-    setRedirectCountdown(seconds);
-    const timer = setInterval(() => {
-      setRedirectCountdown((prev) => {
-        if (prev === null || prev <= 1) {
-          clearInterval(timer);
-          setCompleted(null);
-
-          /**
-           * 1.5.23: остался встречный — открываем ЕГО, а не список
-           * свободных. Раньше отсюда всегда уходили в «Заказы», и водитель
-           * со вторым заказом в работе оказывался на экране свободных
-           * заказов — а его клиент в это время ждал в машине. Найти
-           * встречный можно было только вручную, через вкладку «Заказ».
-           */
-          const remaining = ordersRef.current ?? [];
-          if (remaining.length > 0 && remaining[0]) {
-            setSelectedId(remaining[0].id);
-          } else {
-            router.replace('/(main)/(tabs)/orders');
-          }
-          return null;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [completed, router]);
+  }, [router]);
 
   const openNavigator = useCallback(
     (lat: number, lng: number) => {
@@ -391,9 +461,84 @@ export default function CurrentOrderScreen() {
     await notify('Заказ передан в поиск', result.message);
   }, [order, confirm, notify, queryClient]);
 
+  /**
+   * Отметить промежуточную точку пройденной.
+   *
+   * Отдельно от `handlePrimaryAction`, потому что это не смена статуса
+   * заказа: заказ остаётся в пути, меняется только его маршрут по точкам.
+   */
+  const handleStopReached = useCallback(
+    async (stopId: string, label: string) => {
+      if (!order) return;
+      haptics.tap();
+      const ok = await confirm({
+        title: `${label}?`,
+        message: 'Отметить точку пройденной и ехать дальше',
+        confirmLabel: 'Проехали',
+      });
+      if (!ok) return;
+
+      setMarkingStop(true);
+      try {
+        haptics.confirm();
+        await arriveStop(order.id, stopId);
+        await queryClient.invalidateQueries({ queryKey: activeOrdersQueryKey });
+      } catch (err) {
+        driverLogger.error('arriveStop failed', {
+          screen: 'current',
+          action: 'order_stop_arrive_error',
+          orderId: order.id,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        await notify('Не удалось отметить точку', 'Проверьте связь и попробуйте ещё раз.');
+      } finally {
+        setMarkingStop(false);
+      }
+    },
+    [order, confirm, notify, queryClient],
+  );
+
+  /**
+   * Включить или выключить платное ожидание.
+   *
+   * Без подтверждения: это переключатель, а не необратимое действие —
+   * нажал не туда, нажми ещё раз. Диалог на каждую остановку у аптеки был
+   * бы издевательством.
+   */
+  const handleToggleWaiting = useCallback(async () => {
+    if (!order) return;
+    const on = !order.meter?.waitingOn;
+    setSwitchingWaiting(true);
+    try {
+      haptics.tap();
+      await setWaiting(order.id, on);
+      await queryClient.invalidateQueries({ queryKey: activeOrdersQueryKey });
+    } catch (err) {
+      driverLogger.error('setWaiting failed', {
+        screen: 'current',
+        action: 'order_waiting_error',
+        orderId: order.id,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      await notify('Не удалось переключить ожидание', 'Проверьте связь и попробуйте ещё раз.');
+    } finally {
+      setSwitchingWaiting(false);
+    }
+  }, [order, notify, queryClient]);
+
   /** Одно подтверждение на все три действия — текст берётся по статусу. */
   const handlePrimaryAction = useCallback(() => {
     if (!order) return;
+
+    // Пока впереди есть непройденная точка, главная кнопка ведёт к ней.
+    // Завершение заказа на середине маршрута — самая дорогая ошибка на этом
+    // экране: вернуть заказ в работу водитель уже не сможет.
+    const pending = nextPendingStop(order.stops, order.status);
+    if (pending) {
+      void handleStopReached(pending.id, stopActionLabel(pending));
+      return;
+    }
+
     const config = ACTION_BY_STATUS[order.status];
     if (!config) return;
 
@@ -417,15 +562,26 @@ export default function CurrentOrderScreen() {
         );
       } else if (order.status === 'in_progress') {
         const price = order.estimatedPrice;
-        runOrderAction('complete', order.id, () =>
-          complete.mutate(
-            { orderId: order.id },
-            {
-              // Сумму берём из ответа сервера: финальная цена может
-              // отличаться от расчётной (наценки, правки диспетчера).
-              onSuccess: (res) => setCompleted({ price: res.finalPrice ?? price }),
-              onError: (e) => onError(e, 'complete'),
-            },
+        /**
+         * Последние метры досылаются ДО завершения и именно с ожиданием.
+         *
+         * Сервер считает итог по показаниям, которые у него есть на момент
+         * завершения. Пусти оба запроса наперегонки — и на медленной связи
+         * завершение обгонит показания, а последние метры поездки просто не
+         * попадут в чек. `finishMeter` не бросает: не ушло — сервер посчитает
+         * по тому, что успел получить, но шанс мы дали.
+         */
+        void finishMeter(order.id).then(() =>
+          runOrderAction('complete', order.id, () =>
+            complete.mutate(
+              { orderId: order.id },
+              {
+                // Сумму берём из ответа сервера: финальная цена может
+                // отличаться от расчётной (наценки, правки диспетчера).
+                onSuccess: (res) => setCompleted({ price: res.finalPrice ?? price }),
+                onError: (e) => onError(e, 'complete'),
+              },
+            ),
           ),
         );
       }
@@ -439,7 +595,7 @@ export default function CurrentOrderScreen() {
     }).then((ok) => {
       if (ok) run();
     });
-  }, [order, arrive, start, complete, runOrderAction, confirm]);
+  }, [order, arrive, start, complete, runOrderAction, confirm, handleStopReached]);
 
   const call = (phone: string) => {
     haptics.tap();
@@ -510,13 +666,17 @@ export default function CurrentOrderScreen() {
     );
   }
 
-  // Показывается ПОСЛЕ завершения, пока идёт обратный отсчёт до возврата
-  // к списку. Стоит выше проверки `!order` намеренно: завершённого заказа
-  // в данных уже нет, и без этого водитель увидел бы «Нет активного заказа».
+  // Показывается ПОСЛЕ завершения и висит, пока водитель не нажмёт кнопку.
+  // Стоит выше проверки `!order` намеренно: завершённого заказа в данных
+  // уже нет, и без этого водитель увидел бы «Нет активного заказа».
   if (completed) {
     return (
       <Screen style={styles.centered}>
-        <CompletedCard price={completed.price} countdown={redirectCountdown} />
+        <CompletedCard
+          price={completed.price}
+          onDone={handleCompletedDone}
+          nextOrderNumber={ordersRef.current?.[0]?.orderNumber ?? null}
+        />
       </Screen>
     );
   }
@@ -559,6 +719,61 @@ export default function CurrentOrderScreen() {
   const action = ACTION_BY_STATUS[order.status];
 
   /**
+   * Счётчик показываем только пока есть что считать.
+   *
+   * На подаче он тоже идёт (там уже тикает ожидание), но показывать деньги
+   * до посадки клиента незачем: водителю в этот момент нужен адрес, а не
+   * сумма.
+   */
+  const meter =
+    order.status === 'in_progress' && order.meter ? order.meter : null;
+
+  /**
+   * Сколько из итога приходится на саму поездку — всё, что не ожидание.
+   *
+   * Правило вынесено в `@/lib/trip-receipt`: там оно под тестами, потому что
+   * держит СХОДИМОСТЬ чека, а она не выводится из типов и не падает при
+   * нарушении — строки просто перестают давать итог на глазах у клиента.
+   *
+   * Правила «деньги считает сервер» это не нарушает: обе величины пришли ОТ
+   * НЕГО, здесь только раскладка уже посчитанного.
+   */
+  const rideCost = meter ? rideCostOf(meter.total, meter.waitingCost) : 0;
+
+  /**
+   * Счётчик для ШАПКИ — начиная с подачи, а не с посадки.
+   *
+   * На подаче уже идёт платное ожидание, и именно там водителю нужен ответ
+   * на «сколько ещё бесплатно». Развёрнутая карточка ниже остаётся про
+   * поездку: до посадки в ней нечего расшифровывать, кроме ожидания.
+   */
+  const headerMeter =
+    (order.status === 'driver_arrived' || order.status === 'in_progress') && order.meter
+      ? order.meter
+      : null;
+
+  /** Что сказать про ожидание одной строкой. `null` — говорить нечего. */
+  const hint = headerMeter
+    ? waitingHint({
+        waitingSec: liveWaitingSec(
+          headerMeter.waitingSec,
+          headerMeter.waitingOn,
+          nowMs - dataUpdatedAt,
+        ),
+        waitingOn: headerMeter.waitingOn,
+        freeSec: headerMeter.waitingFreeSec,
+        perMinute: headerMeter.waitingPerMinute,
+        cost: headerMeter.waitingCost,
+      })
+    : null;
+
+  /**
+   * Непройденная промежуточная точка. Пока она есть, главная кнопка ведёт
+   * к ней, а не к завершению поездки: правило в `@/lib/order-stop-progress`.
+   */
+  const pendingStop = nextPendingStop(order.stops, order.status);
+
+  /**
    * Открытый заказ ждёт своей очереди: клиент другого заказа ещё в машине.
    *
    * То же правило, что теперь проверяет сервер (v1.99.78). До него «Я на
@@ -569,9 +784,16 @@ export default function CurrentOrderScreen() {
   const waitsForCurrent = Boolean(
     orders?.some((o) => o.id !== order.id && o.status === 'in_progress'),
   );
-  /** Отказаться можно только до посадки — дальше это дело диспетчера. */
-  const canRelease =
-    waitsForCurrent && (order.status === 'assigned' || order.status === 'driver_arrived');
+  /**
+   * Отказаться можно только до посадки — дальше это дело диспетчера.
+   *
+   * 1.5.49: у ЛЮБОГО заказа, а не только у встречного. Сервер разрешал это
+   * с v1.99.78 (`order-release.ts`), но приложение показывало кнопку лишь
+   * при `waitsForCurrent` — то есть отказаться от обычного заказа было
+   * нечем. Водитель, которому заказ не подходит (сломалась машина, ошибся
+   * при взятии, клиент не выходит), звонил диспетчеру.
+   */
+  const canRelease = order.status === 'assigned' || order.status === 'driver_arrived';
 
   // Нет кнопки — нет и полосы под неё: иначе шторка висела бы над пустой
   // полосой в 88. У ждущего заказа полоса выше на строку объяснения.
@@ -650,14 +872,66 @@ export default function CurrentOrderScreen() {
             })
           : null}
 
-        {order.status === 'driver_arrived' && (
+        {/**
+         * ИТОГО поверх карты — единственное место, где сумма видна, не
+         * трогая шторку.
+         *
+         * ЗАЧЕМ СЮДА, А НЕ В ШАПКУ ШТОРКИ (как было в 1.5.47). Когда шторка
+         * развёрнута, шапка уезжает вместе с ней, и сумма пропадает ровно
+         * тогда, когда водитель читает расшифровку. Плашка же остаётся: от
+         * карты при развёрнутой шторке нарочно оставлена полоска сверху
+         * (56 pt, 1.5.25), и плашка живёт в ней. Одно место на оба
+         * состояния — и дублирования больше нет: до 1.5.48 время ожидания
+         * показывал чип на карте, а деньги за то же ожидание — строка в
+         * шторке.
+         *
+         * НЕ НА ПОДАЧЕ: пока водитель едет к клиенту, счётчик не идёт, и
+         * показывать нечего. Плашка появляется на месте, вместе с
+         * ожиданием, и дальше живёт всю поездку.
+         *
+         * Чип ожидания — только пока оно ИДЁТ. В поездке его включают редко
+         * («подождите, я в аптеку»), и держать под него постоянный чип
+         * значило бы платить местом за событие, которого обычно нет.
+         * Накопленное за ожидание при этом не теряется: оно в сумме, а
+         * разбор — в развёрнутой шторке.
+         *
+         * ПРИ РАЗВЁРНУТОЙ ШТОРКЕ ЧИП ОСТАЁТСЯ. Сначала он там скрывался — из
+         * опасения, что не поместится в полоску карты. Опасение оказалось
+         * напрасным: чипы стоят В ОДНУ СТРОКУ, а строка в 56 pt помещается
+         * целиком. Прятать было нечего, и водитель терял таймер ровно там,
+         * где разбирается со стоимостью.
+         */}
+        {headerMeter ? (
           <Surface level={2} padded={false} radius={radius.pill} style={styles.floatingChip}>
-            <Ionicons name="hourglass-outline" size={iconTokens.xs} color={colors.warning} />
-            <AppText variant="labelStrong" tone="warning">
-              {formatTimer(waitingSeconds)}
+            <AppText variant="overline" tone="muted">
+              Итого
+            </AppText>
+            <AppText style={styles.meterBadgeValue}>
+              {formatCurrency(headerMeter.total)}
             </AppText>
           </Surface>
-        )}
+        ) : null}
+
+        {headerMeter && hint ? (
+          <Surface
+            level={2}
+            padded={false}
+            radius={radius.pill}
+            style={[
+              styles.floatingChip,
+              hint.paid ? { backgroundColor: colors.warningSoft } : null,
+            ]}
+          >
+            <Ionicons
+              name="hourglass-outline"
+              size={iconTokens.xs}
+              color={hint.paid ? colors.warning : colors.textSecondary}
+            />
+            <AppText variant="labelStrong" tone={hint.paid ? 'warning' : 'muted'}>
+              {hint.text}
+            </AppText>
+          </Surface>
+        ) : null}
       </View>
 
       <BottomSheet
@@ -757,14 +1031,41 @@ export default function CurrentOrderScreen() {
                 ) : null}
               </AppText>
 
-              {/* Примечание диспетчера к этому адресу. Одной строкой:
-                  полностью оно есть ниже, в развёрнутом маршруте, а здесь
-                  важно, что оно вообще ЕСТЬ. */}
+              {/**
+               * Примечание диспетчера к этому адресу.
+               *
+               * 1.5.48: 17 пунктов вместо 12 и две строки вместо одной. По
+               * замечанию владельца — было слишком мелко. Это и правда не
+               * подпись: «ждать у шлагбаума, пропуск на посту» решает,
+               * найдёт водитель клиента или будет ему звонить, а набрано
+               * оно было втрое незаметнее, чем комментарий к заказу (19 pt)
+               * в той же шторке. Место под это освободила ушедшая на карту
+               * строка счётчика.
+               *
+               * Две строки, а не сколько получится: шапка видна в свёрнутом
+               * состоянии, и её высота — это отнятая у карты высота.
+               */}
               {target.note ? (
-                <AppText variant="caption" tone="warning" numberOfLines={1}>
+                <AppText style={styles.targetNote} tone="warning" numberOfLines={2}>
                   {target.note}
                 </AppText>
               ) : null}
+
+              {/**
+               * ЗДЕСЬ БЫЛА СТРОКА СЧЁТЧИКА (1.5.47), убрана в 1.5.48.
+               *
+               * Сумма переехала на плашку поверх карты. Причина — не место,
+               * а ДУБЛИРОВАНИЕ: время ожидания показывал чип на карте, а
+               * деньги за то же самое ожидание — эта строка. Одно событие в
+               * двух местах, и ни в одном целиком.
+               *
+               * Требование «сумма видна без жеста» плашка выполняет строже,
+               * чем шапка: шапка уезжает вместе со шторкой, когда её
+               * разворачивают, а плашка остаётся в полоске карты сверху.
+               *
+               * Освободившееся место отдано примечанию к адресу — оно выше и
+               * теперь набрано читаемым кеглем.
+               */}
             </View>
           </View>
         }
@@ -782,16 +1083,177 @@ export default function CurrentOrderScreen() {
             <RoutePoints points={routePoints} style={styles.route} />
           </View>
 
+          {/* Счётчик. Показывается, пока заказ выполняется и сервер умеет
+              его считать (v1.100.2+). Клиент спрашивает «сколько уже
+              натикало» посреди поездки, и до 1.5.46 ответить было нечем:
+              в карточке стояла только предварительная стоимость.
+
+              СУММУ СЧИТАЕТ СЕРВЕР. Тариф на телефоне подставной, и число,
+              посчитанное здесь, разошлось бы с тем, что спишется. Телефон
+              меряет метры, деньги приходят обратно. */}
+          {meter && (
+            <View style={styles.section}>
+              <View style={styles.meterHeader}>
+                {/**
+                 * «Стоимость», а не «Счётчик» (1.5.48).
+                 *
+                 * Первое: заголовок «СЧЁТЧИК» и первая же строка под ним «На
+                 * счётчике» — одно слово дважды подряд, владелец обвёл это
+                 * на снимке. Второе: в блоке не только показания счётчика,
+                 * но и условия тарифа с предварительной ценой, а «счётчик»
+                 * называет механизм там, где водителю нужен ответ на вопрос
+                 * «сколько».
+                 */}
+                <AppText variant="overline" tone="muted">
+                  Стоимость
+                </AppText>
+                {/* «Ожидание…» — ярлык состояния, а не фраза. Многоточие
+                    говорит «идёт прямо сейчас» короче, чем это делало слово
+                    «идёт», и не спорит с иконкой паузы рядом, которая
+                    сообщает ровно то же. Стоит у заголовка, а не внутри
+                    карточки: это состояние всего блока. */}
+                {meter.waitingOn && (
+                  <View style={[styles.waitingChip, { backgroundColor: colors.warningSoft }]}>
+                    <Ionicons name="pause" size={12} color={colors.warning} />
+                    <AppText variant="caption" tone="warning">
+                      Ожидание…
+                    </AppText>
+                  </View>
+                )}
+              </View>
+
+              {/**
+               * Предварительная цена — НАД чеком и вне его рамки.
+               *
+               * Внутри чека она стояла последней строкой, под итогом, и в
+               * одном столбце с суммами читалась как ещё одно слагаемое.
+               * А это не слагаемое: это то, что назвали клиенту при заказе,
+               * ориентир, с которым водитель сверяет счёт. Место такому —
+               * перед счётом, а не после него.
+               */}
+              {order.estimatedPrice != null && (
+                <AppText variant="caption" tone="muted">
+                  Предварительно называли {formatCurrency(order.estimatedPrice)}
+                </AppText>
+              )}
+
+              {/**
+               * ЧЕК, А НЕ СВОДКА (1.5.48).
+               *
+               * Раньше здесь стояла крупная сумма, а под ней — россыпь
+               * подписей: пробег, ожидание, условия, предварительная цена.
+               * Сумма при этом уже была на карте, то есть повторялась, а на
+               * главный вопрос клиента — «за ЧТО столько?» — блок отвечал
+               * набором строк, которые ещё надо было сложить самому.
+               *
+               * Строки «за что — сколько» отвечают на него сразу, а итог
+               * внизу закрывает счёт, как в любом чеке.
+               */}
+              <Surface level={0} style={styles.meterCard}>
+                <FareRow
+                  label={`Поездка · ${formatDistance(meter.distanceM / 1000)} · ${formatDuration(
+                    Math.round(meter.movingSec / 60),
+                  )}`}
+                  value={formatCurrency(rideCost)}
+                />
+
+                {/**
+                 * Где именно ехали — подписью под строкой поездки.
+                 *
+                 * ЗАЧЕМ. С v1.100.5 сервер считает пробег ПО ЗОНАМ, и за
+                 * городом километр стоит в разы дороже. Без этой подписи
+                 * водитель видит «120 ₽ за 2.4 км» и объяснить клиенту
+                 * ничего не может — то есть показания без разбора хуже, чем
+                 * их отсутствие: повод для спора есть, а ответа нет.
+                 *
+                 * Строка появляется ТОЛЬКО когда есть что сказать: поездка
+                 * целиком по городу — обычный случай, и повторять «по
+                 * городу 2.4 км» под строкой, где уже написано 2.4 км,
+                 * незачем.
+                 */}
+                {meter.zones &&
+                  (meter.zones.settlementKm > 0 || meter.zones.intercityKm > 0) && (
+                    <AppText variant="caption" tone="muted">
+                      {[
+                        meter.zones.cityKm > 0
+                          ? `по городу ${formatDistance(meter.zones.cityKm)}`
+                          : null,
+                        meter.zones.settlementKm > 0
+                          ? `по посёлку ${formatDistance(meter.zones.settlementKm)}`
+                          : null,
+                        meter.zones.intercityKm > 0
+                          ? `за городом ${formatDistance(meter.zones.intercityKm)}`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </AppText>
+                  )}
+
+                {/* Ожидание отдельной строкой, а не хвостом к пробегу.
+                    Водителю тут важны ТРИ разных числа, и слитые в одну
+                    строку они не читаются: сколько всего ждал, сколько из
+                    этого платного и на сколько рублей это вышло. Первый
+                    вопрос клиента — «за что?», и ответ должен быть готов. */}
+                {meter.waitingSec > 0 && (
+                  <FareRow
+                    label={
+                      meter.chargeableWaitingSec > 0
+                        ? `Ожидание ${formatWaitClock(meter.waitingSec)} · платно ${formatWaitClock(
+                            meter.chargeableWaitingSec,
+                          )}`
+                        : `Ожидание ${formatWaitClock(meter.waitingSec)} · всё бесплатное`
+                    }
+                    value={formatCurrency(meter.waitingCost)}
+                  />
+                )}
+
+                {/* Условия из тарифа. Их водитель не знает наизусть, а
+                    объясняться с клиентом ему. */}
+                {waitingTermsText(meter.waitingFreeSec, meter.waitingPerMinute) ? (
+                  <AppText variant="caption" tone="muted">
+                    {waitingTermsText(meter.waitingFreeSec, meter.waitingPerMinute)}
+                  </AppText>
+                ) : null}
+
+                <Divider />
+
+                <FareRow
+                  label="Итого"
+                  value={formatCurrency(meter.total)}
+                  strong
+                />
+              </Surface>
+            </View>
+          )}
+
+          {/* Комментарий диспетчера. Единственное место в карточке, где
+              написано то, чего водитель не может узнать больше ниоткуда:
+              «звонить не буду, выходите», «дом со двора», «поедет ребёнок».
+              До 1.5.46 он был набран обычным текстом карточки и терялся среди
+              соседних строк — водители его не замечали. Поэтому здесь и
+              размер крупнее рядового текста, и цветная полоса слева, и
+              значок: блок обязан читаться боковым зрением, а не находиться
+              чтением. */}
           {order.comment ? (
-            <Surface level={0} style={[styles.comment, { backgroundColor: colors.warningSoft }]}>
-              <AppText variant="overline" tone="warning">
-                Комментарий
-              </AppText>
-              <AppText variant="body" style={styles.commentText}>
-                {order.comment}
-              </AppText>
+            <Surface
+              level={0}
+              style={[
+                styles.comment,
+                { backgroundColor: colors.warningSoft, borderLeftColor: colors.warning },
+              ]}
+            >
+              <View style={styles.commentHeader}>
+                <Ionicons name="chatbubble-ellipses" size={16} color={colors.warning} />
+                <AppText variant="overline" tone="warning">
+                  Комментарий
+                </AppText>
+              </View>
+              <AppText style={styles.commentText}>{order.comment}</AppText>
             </Surface>
           ) : null}
+
+
 
           <View style={styles.section}>
             <AppText variant="overline" tone="muted">
@@ -828,6 +1290,34 @@ export default function CurrentOrderScreen() {
               {order.startedAt && <DetailRow label="Начат" value={formatTime(order.startedAt)} />}
             </Surface>
           </View>
+
+          {/**
+           * Отказ от заказа — В КОНЦЕ ШТОРКИ, а не в полосе действия.
+           *
+           * У встречного заказа он стоит в полосе, и это правильно: там
+           * главной кнопки нет, полоса пустует. У обычного заказа она
+           * занята «Я на месте» / «Завершить поездку», и третья кнопка
+           * встала бы вплотную к ним.
+           *
+           * ЭТОГО ДЕЛАТЬ НЕЛЬЗЯ. Ожидание рядом с главной кнопкой безопасно,
+           * потому что это переключатель: нажал не туда — нажми ещё раз.
+           * Отказ необратим: заказ уходит другому водителю, а промах
+           * попадает в рейтинг. Такое действие должно требовать жеста
+           * (развернуть шторку) и прокрутки до конца — не «под пальцем».
+           */}
+          {canRelease && !waitsForCurrent && (
+            <View style={styles.section}>
+              <Button
+                onPress={handleRelease}
+                size="lg"
+                fullWidth
+                variant="dangerGhost"
+                loading={releasing}
+              >
+                Отказаться от заказа
+              </Button>
+            </View>
+          )}
         </ScrollView>
       </BottomSheet>
 
@@ -861,15 +1351,81 @@ export default function CurrentOrderScreen() {
             </>
           ) : (
             action && (
-              <Button
-                onPress={handlePrimaryAction}
-                size="lg"
-                fullWidth
-                variant={order.status === 'in_progress' ? 'success' : 'primary'}
-                loading={arrive.isPending || start.isPending || complete.isPending}
-              >
-                {action.label}
-              </Button>
+              /**
+               * Главное действие и ожидание — ОДНОЙ строкой.
+               *
+               * Ожидание включают в случайный момент («подождите, я в
+               * аптеку»), и держать эту кнопку в шторке значило бы дёргать
+               * шторку на каждой остановке. Квадрат рядом с главной кнопкой
+               * — то же место, куда водитель и так смотрит.
+               *
+               * ПРОМАХ ЗДЕСЬ БЕЗОПАСЕН В ОБЕ СТОРОНЫ. Ожидание —
+               * переключатель: нажал не туда, нажми ещё раз. А у «Завершить
+               * поездку» есть подтверждение, поэтому случайное касание не
+               * заканчивает заказ, а показывает диалог.
+               */
+              <View style={styles.actionRow}>
+                {/* Обёртка обязательна: `fullWidth` у кнопки — это
+                    `width: '100%'`, и в строке она заняла бы всю ширину,
+                    вытолкнув квадрат ожидания за край экрана. `flex: 1`
+                    отдаёт кнопке остаток строки, а «100 %» считается уже
+                    от него. */}
+                <View style={styles.actionMain}>
+                  <Button
+                    onPress={handlePrimaryAction}
+                    size="lg"
+                    fullWidth
+                    // Зелёная — только настоящее завершение. Пока впереди
+                    // есть непройденная точка, кнопка ведёт по маршруту, и
+                    // цвет «поездка закончена» на ней читался бы как
+                    // приглашение завершить заказ на середине.
+                    variant={
+                      order.status === 'in_progress' && !pendingStop
+                        ? 'success'
+                        : 'primary'
+                    }
+                    loading={
+                      arrive.isPending ||
+                      start.isPending ||
+                      complete.isPending ||
+                      markingStop
+                    }
+                  >
+                    {pendingStop ? stopActionLabel(pendingStop) : action.label}
+                  </Button>
+                </View>
+
+                {/* Пока сервер не завёл счётчик (заказ ещё не в подаче)
+                    выключать нечего — кнопки нет. */}
+                {meter && (
+                  <Pressable
+                    onPress={handleToggleWaiting}
+                    disabled={switchingWaiting}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      meter.waitingOn
+                        ? 'Закончить ожидание'
+                        : 'Начать платное ожидание'
+                    }
+                    style={({ pressed }) => [
+                      styles.waitingSquare,
+                      {
+                        backgroundColor: meter.waitingOn
+                          ? colors.danger
+                          : colors.surfaceSunken,
+                        borderColor: meter.waitingOn ? colors.danger : colors.border,
+                        opacity: pressed || switchingWaiting ? 0.7 : 1,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={meter.waitingOn ? 'pause' : 'hourglass-outline'}
+                      size={24}
+                      color={meter.waitingOn ? colors.textInverse : colors.textSecondary}
+                    />
+                  </Pressable>
+                )}
+              </View>
             )
           )}
         </View>
@@ -923,16 +1479,47 @@ function pickTarget(order: CurrentOrder, short: ShortAddresses): Target {
     };
   }
 
-  const firstStop = (order.stops ?? [])[0];
-  if (firstStop) {
-    const point = splitAddressEntrance(short.stops[0] ?? firstStop.address, firstStop.entrance);
+  /**
+   * Первая НЕПРОЙДЕННАЯ точка, а не просто первая (исправлено в 1.5.49).
+   *
+   * Брали `stops[0]` без оглядки на `arrivedAt`, и после отметки «точка
+   * пройдена» шапка продолжала показывать адрес, где водитель уже стоит.
+   * Кнопка при этом честно менялась на «Завершить поездку» — то есть экран
+   * говорил две разные вещи одновременно: «вам сюда» и «поездка окончена».
+   *
+   * Правило берём ТО ЖЕ, что у кнопки (`nextPendingStop`), а не пишем своё
+   * рядом: два правила про одну вещь неизбежно разъезжаются, и разъехались
+   * бы снова на первой же правке.
+   */
+  const pending = nextPendingStop(order.stops, order.status);
+
+  /**
+   * Сервер старше приложения: `stops[].id` появился в v1.100.2, а без него
+   * `nextPendingStop` вести по точкам не может и возвращает `null`. Тогда
+   * ведём себя как до 1.5.46 — целью остаётся первая остановка. Молча
+   * перескакивать на конечный адрес нельзя: промежуточная точка исчезла бы
+   * с экрана вовсе.
+   */
+  const stops = order.stops ?? [];
+  const legacyStop =
+    !pending && stops.length > 0 && stops.every((s) => !s.id && !s.arrivedAt)
+      ? { stop: stops[0]!, number: 1 }
+      : null;
+
+  const leg = pending ?? legacyStop;
+  if (leg) {
+    const index = leg.number - 1;
+    const point = splitAddressEntrance(
+      short.stops[index] ?? leg.stop.address,
+      leg.stop.entrance,
+    );
     return {
-      label: 'Остановка',
+      label: `Точка ${leg.number}`,
       address: point.address,
       entrance: point.entrance,
-      note: firstStop.note,
-      lat: firstStop.lat,
-      lng: firstStop.lng,
+      note: leg.stop.note,
+      lat: leg.stop.lat,
+      lng: leg.stop.lng,
     };
   }
 
@@ -1037,16 +1624,34 @@ function DetailRow({
   );
 }
 
-/** Экран после завершения: сколько заработано и когда вернёмся к списку. */
+/**
+ * Экран после завершения: сколько заработано и что дальше.
+ *
+ * УХОДИМ ПО КНОПКЕ, А НЕ ПО ТАЙМЕРУ (1.5.49). Прежние пять секунд обратного
+ * отсчёта не давали ни прочитать сумму, ни назвать её клиенту: экран уезжал
+ * сам, а вернуться было некуда — завершённого заказа в ответе сервера нет.
+ *
+ * ЦЕНА ЭТОГО РЕШЕНИЯ И ЧЕМ ОНА ЗАКРЫТА. Пока водитель стоит здесь, он не
+ * видит новых заказов: они приходят обновлением списка на другом экране, а
+ * уведомление показывается, только когда приложение в фоне. Стоянка на этой
+ * карточке была бы слепой — поэтому карточка сама следит за свободными
+ * заказами и говорит, сколько их рядом. Кнопка при этом меняет смысл: если
+ * в работе остался встречный заказ, она ведёт к НЕМУ, а не в список.
+ */
 function CompletedCard({
   price,
-  countdown,
+  onDone,
+  nextOrderNumber,
 }: {
   price: number | null;
-  countdown: number | null;
+  onDone: () => void;
+  /** Номер оставшегося в работе заказа — тогда кнопка ведёт к нему. */
+  nextOrderNumber: number | null;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const { data: available } = useAvailableOrders();
+  const nearby = available?.length ?? 0;
 
   useEffect(() => {
     haptics.success();
@@ -1063,11 +1668,32 @@ function CompletedCard({
       <AppText variant="display" tone="success" center style={styles.completedPrice}>
         {formatCurrency(price)}
       </AppText>
-      {countdown != null && (
+
+      {nextOrderNumber != null ? (
         <AppText variant="label" tone="muted" center>
-          Переход к заказам через {countdown} с
+          В работе остался заказ № {nextOrderNumber}
+        </AppText>
+      ) : nearby > 0 ? (
+        // Живой счётчик: пока водитель читает сумму, рядом появляются
+        // заказы, и он должен знать об этом, не уходя с экрана.
+        <AppText variant="label" tone="success" center>
+          Рядом свободных заказов: {nearby}
+        </AppText>
+      ) : (
+        <AppText variant="label" tone="muted" center>
+          Свободных заказов рядом пока нет
         </AppText>
       )}
+
+      <Button
+        onPress={onDone}
+        size="lg"
+        fullWidth
+        variant={nextOrderNumber != null ? 'primary' : 'success'}
+        style={styles.completedButton}
+      >
+        {nextOrderNumber != null ? 'К СЛЕДУЮЩЕМУ ЗАКАЗУ' : 'ГОТОВ К ЗАКАЗАМ'}
+      </Button>
     </Surface>
   );
 }
@@ -1159,12 +1785,28 @@ const createStyles = (t: Theme) =>
     },
     mapFallbackText: { maxWidth: 300 },
 
+    /**
+     * Полоса поверх карты: чипы выбора заказа, «Итого» и ожидание — в один
+     * ряд и одной высоты. Прижата к самому верху (4, а не 12) по просьбе
+     * владельца: полоса и так съедает у карты высоту, и лишний отступ здесь
+     * ничего не даёт.
+     *
+     * ПЕРЕНОС ОБЯЗАТЕЛЕН. При встречном заказе в ряду стоят четыре чипа, и
+     * без `wrap` последний просто уезжает за край — молча, Yoga его не
+     * обрежет и не пожалуется.
+     *
+     * Правый край НЕ до края экрана: там кнопки самой карты («общий план» и
+     * «на себя», по 40 pt при отступе 12 — см. `OrderMap`).
+     * `MAP_BUTTONS_INSET` держит от них дистанцию.
+     */
     floatingTop: {
       position: 'absolute',
-      top: spacing.md,
+      top: spacing.xs,
       left: spacing.lg,
-      right: spacing.lg,
+      right: MAP_BUTTONS_INSET,
       flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
       gap: spacing.sm,
     },
     floatingChip: {
@@ -1199,8 +1841,87 @@ const createStyles = (t: Theme) =>
       borderBottomWidth: 1,
       borderBottomColor: t.colors.border,
     },
-    comment: { gap: spacing.xs },
-    commentText: { marginTop: spacing.xs },
+    // Счётчик. Сумма набрана крупно и моноширинно: её называют клиенту
+    // вслух, глядя на экран одним взглядом, и цифры не должны прыгать по
+    // ширине при каждом изменении.
+    // Строка счётчика в ШАПКЕ шторки — её видно, не разворачивая.
+    /**
+     * Сумма в чипе «Итого».
+     *
+     * 16 pt при `lineHeight` 19 — том же, что у `labelStrong` в соседних
+     * чипах: так чип с деньгами выходит той же высоты, что «Текущий» и
+     * «Встречный», и ряд читается как ряд, а не как случайный набор плашек.
+     * Соседей эта надпись перевешивает начертанием (800), а не кеглем — это
+     * единственное число на карте, и проигрывать ей оно не должно.
+     *
+     * Табличные цифры — чтобы чип не дёргался по ширине на каждой смене
+     * разряда.
+     */
+    meterBadgeValue: {
+      fontSize: 16,
+      lineHeight: 19,
+      fontWeight: '800',
+      fontVariant: ['tabular-nums'],
+    },
+
+    // 17 pt: примечание к адресу читают на ходу. Тот же порядок, что у
+    // комментария к заказу (19), а не подпись под ним (12).
+    targetNote: { fontSize: 17, lineHeight: 22, fontWeight: '500' },
+
+    meterCard: { gap: spacing.xs },
+    meterHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+    },
+    /**
+     * Строка чека. Подпись тянется, сумма прижата вправо и набрана
+     * табличными цифрами — так суммы стоят колонкой и сравниваются взглядом,
+     * а не чтением.
+     */
+    fareRow: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      justifyContent: 'space-between',
+      gap: spacing.md,
+    },
+    fareLabel: { flex: 1 },
+    fareValue: { fontVariant: ['tabular-nums'] },
+    fareValueStrong: { fontWeight: '800', fontVariant: ['tabular-nums'] },
+    waitingChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 2,
+      borderRadius: radius.pill,
+    },
+    // Полоса действия: главная кнопка тянется, ожидание — квадрат по её
+    // высоте. Зазор больше обычного: кнопки делают разное, и палец не
+    // должен «соскальзывать» с одной на другую.
+    actionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    actionMain: { flex: 1 },
+    waitingSquare: {
+      width: touch.primary,
+      height: touch.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: radius.lg,
+      borderWidth: 1,
+    },
+
+    comment: { gap: spacing.xs, borderLeftWidth: 4 },
+    commentHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+    // 19 против 16 у рядового текста и полужирный: комментарий читают на
+    // ходу, одним взглядом, и он не должен выглядеть как ещё одна строка
+    // описания заказа.
+    commentText: {
+      marginTop: spacing.xs,
+      fontSize: 19,
+      lineHeight: 25,
+      fontWeight: '600',
+    },
 
     waitNote: { marginBottom: spacing.xs },
     actionBar: {
@@ -1225,4 +1946,7 @@ const createStyles = (t: Theme) =>
       marginBottom: spacing.sm,
     },
     completedPrice: { marginVertical: spacing.xs },
+    // Отступ сверху больше обычного: кнопка уводит с экрана, и её не
+    // должны нажать, целясь в строку про заказы рядом.
+    completedButton: { marginTop: spacing.lg },
   });

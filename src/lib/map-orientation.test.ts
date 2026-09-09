@@ -7,10 +7,11 @@
  *   где наивная арифметика углов ломается молча: без короткой дуги карта
  *   разворачивалась бы через полный круг, а порог доворота срабатывал бы на
  *   ровном месте. Плюс порог как таковой: без него карта трясётся на каждом
- *   фиксе GPS, а слишком большой — и поворот запаздывает.
+ *   фиксе GPS, а слишком большой — и поворот копится в рывок.
  *
  * @dependencies: vitest, @/lib/map-orientation
  * @created: 2026-09-08 (1.5.42)
+ * @updated: 2026-09-08 (1.5.45 — порог уменьшен, смысл его изменился)
  */
 
 import { describe, it, expect } from 'vitest';
@@ -54,23 +55,29 @@ describe('angleDelta', () => {
 });
 
 describe('shouldTurnCamera', () => {
-  it('дрожание курса на прямой камеру не двигает', () => {
-    expect(shouldTurnCamera(100, 103)).toBe(false);
+  it('дрожание курса цель поворота не меняет', () => {
+    expect(shouldTurnCamera(100, 100 + TURN_THRESHOLD_DEG - 1)).toBe(false);
   });
 
-  it('поворот руля — двигает', () => {
+  it('поворот руля — меняет', () => {
     expect(shouldTurnCamera(100, 100 + TURN_THRESHOLD_DEG)).toBe(true);
     expect(shouldTurnCamera(100, 160)).toBe(true);
   });
 
   it('через север порог считается по короткой дуге', () => {
-    expect(shouldTurnCamera(358, 2)).toBe(false); // 4° — шум
+    expect(shouldTurnCamera(359, 1)).toBe(false); // 2° — шум
     expect(shouldTurnCamera(358, 20)).toBe(true); // 22° — поворот
   });
 
   it('курса нет — поворачивать не по чему', () => {
     expect(shouldTurnCamera(0, null)).toBe(false);
     expect(shouldTurnCamera(0, Number.NaN)).toBe(false);
+  });
+
+  it('порог мал: с 1.5.45 он не решает, поворачивать ли вообще', () => {
+    // Камера анимируется на каждый фикс вместе с центром, поэтому большой
+    // порог теперь не экономит движение, а копит рывок.
+    expect(TURN_THRESHOLD_DEG).toBeLessThanOrEqual(3);
   });
 });
 

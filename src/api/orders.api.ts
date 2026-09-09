@@ -280,6 +280,36 @@ export async function startOrder(
   return apiPost(`driver/orders/${orderId}/start`);
 }
 
+/**
+ * Показания счётчика — накопленной суммой, а не приращением.
+ *
+ * Пакет может потеряться или прийти дважды; с приращениями пробег тогда
+ * либо пропадёт, либо задвоится. Сервер берёт большее из своего и
+ * присланного, поэтому запоздавший пакет счётчик не откручивает.
+ */
+export async function sendMeter(
+  orderId: string,
+  reading: { distanceM: number; movingSec: number },
+): Promise<{ success: true; data: { distanceM: number; movingSec: number } }> {
+  return apiPost(`driver/orders/${orderId}/meter`, reading);
+}
+
+/** Включить или выключить платное ожидание. */
+export async function setWaiting(
+  orderId: string,
+  on: boolean,
+): Promise<{ success: true; data: { on: boolean; waitingSec: number } }> {
+  return apiPost(`driver/orders/${orderId}/waiting`, { on });
+}
+
+/** Отметить промежуточную точку пройденной. */
+export async function arriveStop(
+  orderId: string,
+  stopId: string,
+): Promise<{ success: true; data: { stopId: string; arrivedAt: string } }> {
+  return apiPost(`driver/orders/${orderId}/stops/${stopId}/arrive`);
+}
+
 /** Завершить поездку */
 export async function completeOrder(
   orderId: string,

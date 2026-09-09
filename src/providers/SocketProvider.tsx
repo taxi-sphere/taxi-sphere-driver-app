@@ -101,8 +101,25 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    const socket = socketService.getSocket();
-    socket?.on('connect_error', handleConnectError);
+    // Через реестр службы, а не через `getSocket()?.on(...)`: сокета в этот
+    // момент ещё НЕТ (его создаёт `connect()` выше, после `await` за
+    // конфигом), и прежний обработчик не вешался ни разу — обновление
+    // протухшего токена не срабатывало.
+    const unsubConnectError = socketService.onConnectError(handleConnectError);
+
+    /**
+     * Каждое подключение — повод перечитать данные.
+     *
+     * Пока связи не было, сервер слал события в пустоту: Socket.IO их не
+     * переигрывает, и всё, что случилось за время обрыва (заказ отменили,
+     * адрес поправили, баланс изменился), приложение пропустило. Инвалидация
+     * на `connect` — единственный честный способ это закрыть; она же
+     * отрабатывает первое подключение после запуска.
+     */
+    const unsubConnected = socketService.onConnected(() => {
+      void queryClient.invalidateQueries({ queryKey: ['orders'] });
+      void queryClient.invalidateQueries({ queryKey: ['driver', 'profile'] });
+    });
 
     // Подписка на события для инвалидации React Query + local notifications
     const unsubNew = socketService.onOrderNew((data) => {
@@ -187,7 +204,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     });
 
     return () => {
-      socket?.off('connect_error', handleConnectError);
+      unsubConnectError();
+      unsubConnected();
       unsubNew();
       unsubStatus();
       unsubCanceled();

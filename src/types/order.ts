@@ -23,11 +23,54 @@ export type PaymentMethod = 'cash' | 'card' | 'bonus';
 
 /** Промежуточная остановка */
 export interface OrderStop {
+  /**
+   * Нужен, чтобы отметить точку пройденной. `null` у сборок сервера до
+   * v1.100.2 — тогда отмечать нечем, и кнопка ведёт сразу к завершению.
+   */
+  id?: string | null;
   address: string;
   lat: number | null;
   lng: number | null;
   entrance: string | null;
   note: string | null;
+  /** ISO-время отметки. `null`/отсутствует — точку ещё не проехали. */
+  arrivedAt?: string | null;
+}
+
+/**
+ * Показания счётчика по текущему заказу.
+ *
+ * Сумму считает СЕРВЕР по тарифу — приложение её только показывает.
+ * Тариф на телефоне подставной, и число на экране водителя обязано
+ * совпадать с тем, что спишется у клиента.
+ */
+export interface OrderMeter {
+  distanceM: number;
+  movingSec: number;
+  waitingSec: number;
+  waitingOn: boolean;
+  chargeableWaitingSec: number;
+  /** Начислено за ожидание, рубли. */
+  waitingCost: number;
+  /**
+   * Условия ожидания из тарифа. Без них водитель видит только растущее
+   * время и не может ответить клиенту, сколько ещё бесплатно и почём
+   * пойдут деньги.
+   */
+  waitingFreeSec: number;
+  waitingPerMinute: number;
+  /**
+   * Как пробег разложился по зонам (сервер v1.100.5+).
+   *
+   * `null` — считали по городским правилам: зон нет, трека ещё нет либо
+   * сервер старше. Тогда чек показывает одну строку «Поездка», как раньше.
+   */
+  zones: {
+    cityKm: number;
+    settlementKm: number;
+    intercityKm: number;
+  } | null;
+  total: number;
 }
 
 /**
@@ -111,6 +154,11 @@ export interface CurrentOrder {
   tariffName: string | null;
   stops: OrderStop[];
   options: OrderOption[];
+  /**
+   * Счётчик. `null` у сборок сервера до v1.100.2 и у заказа без тарифа —
+   * тогда строки «на счётчике» на экране просто нет.
+   */
+  meter?: OrderMeter | null;
 }
 
 /**

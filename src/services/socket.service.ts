@@ -20,8 +20,70 @@ import type {
 
 type EventCallback<T> = (data: T) => void;
 
+/**
+ * Колбэк, каким его видит реестр: конкретный тип события знает подписчик,
+ * службе он не нужен и не должен быть `any` — иначе ошибка в имени поля
+ * события перестала бы ловиться на стороне подписчика.
+ */
+type RegisteredHandler = (...args: unknown[]) => void;
+
 class SocketService {
   private socket: Socket | null = null;
+
+  /**
+   * РЕЕСТР СЛУШАТЕЛЕЙ — не роскошь, а единственный способ, которым подписки
+   * вообще работают.
+   *
+   * ЧТО БЫЛО СЛОМАНО (исправлено в 1.5.49). Каждый `onXxx` вешал колбэк
+   * прямо на сокет через `this.socket?.on(...)`. Опциональная цепочка молча
+   * НИЧЕГО не делает, когда сокета ещё нет, — а функцию отписки возвращает,
+   * будто всё удалось. И сокета в этот момент нет всегда: `SocketProvider`
+   * подписывается синхронно, а `connect()` вызывает после `await` за
+   * конфигом сервера. То есть НИ ОДНО событие не доходило, и приложение
+   * жило на опросе: отмену заказа водитель узнавал через 10–30 секунд
+   * вместо мгновенной доставки.
+   *
+   * Второй способ потерять подписки — переподключение. `connect()` создаёт
+   * НОВЫЙ объект сокета, а компоненты, подписавшиеся на старый, об этом не
+   * узнают: их эффекты давно отработали.
+   *
+   * Реестр закрывает оба случая: подписка живёт в службе, а не на объекте
+   * сокета, и переносится на каждый новый сокет. Тот же приём, что в
+   * `location.service` (`onLocationPoint`).
+   */
+  private handlers = new Map<string, Set<RegisteredHandler>>();
+
+  /**
+   * Подписаться на событие сервера.
+   *
+   * Работает независимо от того, подключён сокет сейчас или нет: колбэк
+   * ложится в реестр, а на живой сокет вешается сразу либо при следующем
+   * подключении.
+   */
+  private subscribe<T>(event: string, callback: EventCallback<T>): () => void {
+    let set = this.handlers.get(event);
+    if (!set) {
+      set = new Set();
+      this.handlers.set(event, set);
+    }
+    const handler = callback as RegisteredHandler;
+    set.add(handler);
+    this.socket?.on(event, handler);
+
+    return () => {
+      this.handlers.get(event)?.delete(handler);
+      this.socket?.off(event, handler);
+    };
+  }
+
+  /** Перевесить все подписки из реестра на текущий сокет. */
+  private attachHandlers(): void {
+    const socket = this.socket;
+    if (!socket) return;
+    for (const [event, set] of this.handlers) {
+      for (const callback of set) socket.on(event, callback);
+    }
+  }
 
   /** Подключиться к Socket.IO с JWT-токеном */
   connect(token: string): void {
@@ -67,6 +129,11 @@ class SocketService {
         driverLogger.setRealtime(Boolean(data?.realtime));
       },
     );
+
+    // Подписки, сделанные ДО этого момента (а это все подписки приложения —
+    // провайдер вешает их синхронно, пока `connect` ждёт конфиг сервера),
+    // переносим на новый сокет. Без этой строки реестр бесполезен.
+    this.attachHandlers();
   }
 
   /** Отключиться */
@@ -81,26 +148,17 @@ class SocketService {
 
   /** Подписка на событие «новый заказ» */
   onOrderNew(callback: EventCallback<OrderNewEvent>): () => void {
-    this.socket?.on('order:new', callback);
-    return () => {
-      this.socket?.off('order:new', callback);
-    };
+    return this.subscribe('order:new', callback);
   }
 
   /** Подписка на событие «изменение статуса заказа» */
   onOrderStatus(callback: EventCallback<OrderStatusEvent>): () => void {
-    this.socket?.on('order:status', callback);
-    return () => {
-      this.socket?.off('order:status', callback);
-    };
+    return this.subscribe('order:status', callback);
   }
 
   /** Подписка на событие «заказ отменён» */
   onOrderCanceled(callback: EventCallback<OrderCanceledEvent>): () => void {
-    this.socket?.on('order:canceled', callback);
-    return () => {
-      this.socket?.off('order:canceled', callback);
-    };
+    return this.subscribe('order:canceled', callback);
   }
 
   /**
@@ -111,10 +169,7 @@ class SocketService {
    * чтобы отобразить свежие данные без ожидания 30-секундного poll'а.
    */
   onOrderUpdated(callback: EventCallback<{ orderId: string }>): () => void {
-    this.socket?.on('order:updated', callback);
-    return () => {
-      this.socket?.off('order:updated', callback);
-    };
+    return this.subscribe('order:updated', callback);
   }
 
   /**
@@ -136,28 +191,45 @@ class SocketService {
       graceExpiresAt: string;
     }>,
   ): () => void {
-    this.socket?.on('order:confirmation_required', callback);
-    return () => {
-      this.socket?.off('order:confirmation_required', callback);
-    };
+    return this.subscribe('order:confirmation_required', callback);
   }
 
   /** Заказ передали другому водителю — водитель не подтвердил вовремя. */
   onOrderReassigned(
     callback: EventCallback<{ orderId: string; orderNumber: number; reason: string }>,
   ): () => void {
-    this.socket?.on('order:reassigned', callback);
-    return () => {
-      this.socket?.off('order:reassigned', callback);
-    };
+    return this.subscribe('order:reassigned', callback);
   }
 
   /** Подписка на событие «баланс изменился» */
   onBalanceChanged<T>(callback: EventCallback<T>): () => void {
-    this.socket?.on('balance:changed', callback);
-    return () => {
-      this.socket?.off('balance:changed', callback);
-    };
+    return this.subscribe('balance:changed', callback);
+  }
+
+  /**
+   * Соединение установлено — в том числе ПОСЛЕ обрыва.
+   *
+   * Зачем это наружу: пока связи не было, сервер слал события в пустоту, и
+   * они потеряны безвозвратно — Socket.IO их не переигрывает. Единственный
+   * честный способ узнать, что изменилось, — перечитать данные. Поэтому
+   * подписчик (`SocketProvider`) на каждое подключение сбрасывает кэш
+   * запросов. Без этого водитель после туннеля или лифта работает по
+   * данным, устаревшим на всю длину обрыва.
+   */
+  onConnected(callback: () => void): () => void {
+    return this.subscribe('connect', callback as RegisteredHandler);
+  }
+
+  /**
+   * Ошибка подключения — обычно протухший токен.
+   *
+   * До 1.5.49 провайдер вешал этот обработчик через `getSocket()?.on(...)`
+   * сразу после монтирования, когда сокета ещё нет: обработчик не
+   * регистрировался, и обновление токена по ошибке авторизации не
+   * срабатывало ни разу.
+   */
+  onConnectError(callback: (err: Error) => void): () => void {
+    return this.subscribe('connect_error', callback as RegisteredHandler);
   }
 
   /** Принудительное переподключение */

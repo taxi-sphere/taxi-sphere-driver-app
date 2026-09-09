@@ -30,7 +30,16 @@ export type ButtonVariant =
   | 'success'
   | 'danger'
   | 'outline'
-  | 'ghost';
+  | 'ghost'
+  /**
+   * Опасное ВТОРОСТЕПЕННОЕ действие: красный текст без заливки.
+   *
+   * `danger` (сплошная заливка) для такого слишком громок — залитая
+   * красным кнопка тянет на себя внимание в экране, где главное действие
+   * другое. А `ghost` наоборот: серый текст на опасном действии читается
+   * как отключённая кнопка. Между ними и стоит этот вариант.
+   */
+  | 'dangerGhost';
 
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
@@ -84,6 +93,7 @@ export function Button({
     danger: colors.danger,
     outline: 'transparent',
     ghost: 'transparent',
+    dangerGhost: 'transparent',
   };
   const labels: Record<ButtonVariant, string> = {
     primary: colors.textInverse,
@@ -92,6 +102,7 @@ export function Button({
     danger: colors.textInverse,
     outline: colors.primary,
     ghost: colors.textSecondary,
+    dangerGhost: colors.danger,
   };
 
   const isBlocked = disabled || loading;

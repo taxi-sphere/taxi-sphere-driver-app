@@ -54,7 +54,6 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Circle } from 'react-native-svg';
 import type { AvailableOrder } from '@/types/order';
 import {
   pickupEtaPresets,
@@ -109,54 +108,17 @@ const HOLD_ACCELERATION = 0.75;
 const HOLD_MIN_INTERVAL_MS = 60;
 
 /* -------------------------------------------------------------------------- */
-/*  Круговой таймер                                                            */
+/*  Строка главного действия                                                   */
 /* -------------------------------------------------------------------------- */
 
-const RING_SIZE = 140;
-const RING_STROKE = 4;
-const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-
-function CircularTimer({
-  remaining,
-  total,
-}: {
-  remaining: number;
-  total: number;
-}) {
-  const { colors } = useTheme();
-  const progress = Math.max(0, Math.min(1, remaining / total));
-  const offset = RING_CIRCUMFERENCE * (1 - progress);
-  return (
-    <Svg
-      width={RING_SIZE}
-      height={RING_SIZE}
-      style={StyleSheet.absoluteFillObject}
-      // Поворот на -90 градусов — отсчёт начинается сверху
-      transform={[{ rotate: '-90deg' }]}
-    >
-      <Circle
-        cx={RING_SIZE / 2}
-        cy={RING_SIZE / 2}
-        r={RING_RADIUS}
-        stroke={colors.border}
-        strokeWidth={RING_STROKE}
-        fill="transparent"
-      />
-      <Circle
-        cx={RING_SIZE / 2}
-        cy={RING_SIZE / 2}
-        r={RING_RADIUS}
-        stroke={colors.primary}
-        strokeWidth={RING_STROKE}
-        strokeLinecap="round"
-        strokeDasharray={`${RING_CIRCUMFERENCE}`}
-        strokeDashoffset={offset}
-        fill="transparent"
-      />
-    </Svg>
-  );
-}
+/**
+ * Высота строки главного действия.
+ *
+ * 64, а не 56 как у обычной главной кнопки: сюда жмут не глядя, за секунды,
+ * и промах стоит заказа. По ней же берётся сторона квадратной «Пропустить» —
+ * одинаковая высота держит строку ровной без подгонок.
+ */
+const CTA_HEIGHT = 64;
 
 /* -------------------------------------------------------------------------- */
 /*  Селектор времени подачи                                                    */
@@ -604,44 +566,51 @@ export function IncomingOrderModal({
             viaCurrentTrip={etaViaCurrentTrip}
           />
 
-          {/* Кнопка «Принять» с таймером */}
-          <View style={styles.ctaWrap}>
-            <View style={styles.ringWrap}>
-              <CircularTimer remaining={remaining} total={timerSec} />
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.pulseRing,
-                  {
-                    transform: [{ scale: pulseScale }],
-                    opacity: pulseOpacity,
-                  },
-                ]}
-              />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`Принять заказ с временем подачи ${etaMin} минут`}
-                onPress={() => {
-                  haptics.confirm();
-                  onAccept(etaMin);
-                }}
-                disabled={accepting}
-                style={({ pressed }) => [
-                  styles.acceptBtn,
-                  pressed && styles.acceptBtnPressed,
-                  accepting && styles.acceptBtnDisabled,
-                ]}
-              >
-                {accepting ? (
-                  <ActivityIndicator color={colors.textInverse} size="large" />
-                ) : (
-                  <>
-                    <Text style={styles.acceptBtnText}>Принять</Text>
-                    <Text style={styles.acceptBtnTimer}>{remaining}с</Text>
-                  </>
-                )}
-              </Pressable>
-            </View>
+          {/* Принять / пропустить — одной строкой.
+              Круг 140 pt с таймером по периметру занимал вместе с подписью
+              около 200 pt высоты ради одного действия, а «Пропустить» при
+              этом оставалась мелкой надписью. Теперь обе кнопки одной высоты
+              в 64 pt, и главная забирает всю оставшуюся ширину.
+              Таймер стал полосой по низу кнопки: круг был выразительнее, но
+              стоил той самой высоты, из-за которой всё и переделано. */}
+          <View style={styles.ctaRow}>
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.pulseGlow,
+                { transform: [{ scale: pulseScale }], opacity: pulseOpacity },
+              ]}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Принять заказ с временем подачи ${etaMin} минут`}
+              onPress={() => {
+                haptics.confirm();
+                onAccept(etaMin);
+              }}
+              disabled={accepting}
+              style={({ pressed }) => [
+                styles.acceptBtn,
+                pressed && styles.acceptBtnPressed,
+                accepting && styles.acceptBtnDisabled,
+              ]}
+            >
+              {accepting ? (
+                <ActivityIndicator color={colors.textInverse} size="large" />
+              ) : (
+                <Text style={styles.acceptBtnText}>Принять · {remaining} с</Text>
+              )}
+              {/* Полоса убывает слева направо, как песок в часах. Лежит
+                  внутри кнопки, поэтому не занимает ни пикселя сверх неё. */}
+              <View pointerEvents="none" style={styles.timerTrack}>
+                <View
+                  style={[
+                    styles.timerFill,
+                    { width: `${Math.max(0, Math.min(1, remaining / timerSec)) * 100}%` },
+                  ]}
+                />
+              </View>
+            </Pressable>
 
             <TouchableOpacity
               accessibilityRole="button"
@@ -653,8 +622,7 @@ export function IncomingOrderModal({
               disabled={accepting}
               style={styles.skipBtn}
             >
-              <Ionicons name="close" size={18} color={colors.textMuted} />
-              <Text style={styles.skipBtnText}>Пропустить</Text>
+              <Ionicons name="close" size={26} color={colors.textMuted} />
             </TouchableOpacity>
           </View>
         </View>
@@ -783,34 +751,38 @@ const createStyles = (t: Theme) =>
     distance: { alignItems: 'flex-end' },
     distanceValue: { color: t.colors.textPrimary, ...text.heading },
 
-    ctaWrap: { alignItems: 'center', gap: spacing.md, marginTop: spacing.xs },
-    ringWrap: {
-      width: RING_SIZE,
-      height: RING_SIZE,
-      justifyContent: 'center',
+    ctaRow: {
+      flexDirection: 'row',
       alignItems: 'center',
+      gap: spacing.sm,
+      marginTop: spacing.xs,
     },
-    pulseRing: {
+    // Свечение под главной кнопкой вместо прежнего пульсирующего кольца:
+    // урочность осталась, круга больше нет.
+    pulseGlow: {
       position: 'absolute',
-      width: RING_SIZE - 16,
-      height: RING_SIZE - 16,
-      borderRadius: (RING_SIZE - 16) / 2,
+      left: 0,
+      right: CTA_HEIGHT + spacing.sm,
+      top: 0,
+      height: CTA_HEIGHT,
+      borderRadius: radius.lg,
       backgroundColor: t.colors.primarySoft,
     },
     acceptBtn: {
-      width: RING_SIZE - 24,
-      height: RING_SIZE - 24,
-      borderRadius: (RING_SIZE - 24) / 2,
+      flex: 1,
+      height: CTA_HEIGHT,
+      borderRadius: radius.lg,
       backgroundColor: t.colors.primary,
       justifyContent: 'center',
       alignItems: 'center',
+      overflow: 'hidden',
       shadowColor: t.colors.primary,
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.4,
       shadowRadius: 12,
       elevation: 8,
     },
-    acceptBtnPressed: { transform: [{ scale: 0.95 }], backgroundColor: t.colors.primaryDark },
+    acceptBtnPressed: { transform: [{ scale: 0.98 }], backgroundColor: t.colors.primaryDark },
     acceptBtnDisabled: { opacity: 0.7 },
     acceptBtnText: {
       color: t.colors.textInverse,
@@ -818,21 +790,27 @@ const createStyles = (t: Theme) =>
       fontWeight: '800',
       letterSpacing: 0.5,
     },
-    acceptBtnTimer: {
-      color: 'rgba(255, 255, 255, 0.85)',
-      ...text.caption,
-      fontWeight: '600',
-      marginTop: 2,
+    timerTrack: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      height: 4,
+      backgroundColor: 'rgba(255, 255, 255, 0.25)',
     },
+    timerFill: { height: 4, backgroundColor: t.colors.textInverse },
+    // Квадрат по высоте главной кнопки: на ходу в него попадают, а в прежнюю
+    // мелкую надпись — нет.
     skipBtn: {
-      flexDirection: 'row',
+      width: CTA_HEIGHT,
+      height: CTA_HEIGHT,
       alignItems: 'center',
-      gap: spacing.xs,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.xl,
-      borderRadius: radius.pill,
+      justifyContent: 'center',
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      backgroundColor: t.colors.surface,
     },
-    skipBtnText: { color: t.colors.textMuted, ...text.label, fontWeight: '600' },
   });
 
 const createEtaStyles = (t: Theme) =>

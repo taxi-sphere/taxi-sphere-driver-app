@@ -19,6 +19,7 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@/lib/query-client';
 import { installQueryBridges } from '@/lib/query-bridges';
+import { installMeterFeed } from '@/services/trip-meter.service';
 import { ConfirmDialogProvider } from '@/components/ui';
 import { AuthProvider } from './AuthProvider';
 import { SocketProvider } from './SocketProvider';
@@ -29,6 +30,16 @@ import { LocationProvider } from './LocationProvider';
 // без этого вызова `refetchOnReconnect` и `refetchOnWindowFocus` в
 // `query-client.ts` не работают вовсе (1.5.38).
 installQueryBridges();
+
+/**
+ * Счётчик поездки подписывается на поток точек GPS — один раз на модуль,
+ * рядом с остальной установкой мостов.
+ *
+ * Здесь, а не в экране заказа: пробег обязан считаться и когда водитель
+ * ушёл на другую вкладку, и когда экран погас. Экран только говорит
+ * счётчику, ПО КАКОМУ заказу считать (`setMeterOrder`).
+ */
+installMeterFeed();
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   return (

@@ -26,6 +26,49 @@ import {
 import { lightThemeColors } from '@/lib/design/palette';
 
 /* -------------------------------------------------------------------------- */
+/*  Поток точек для других подсистем                                          */
+/* -------------------------------------------------------------------------- */
+
+type PointListener = (point: LocationPoint) => void;
+
+const pointListeners = new Set<PointListener>();
+
+/**
+ * Подписаться на поток точек GPS.
+ *
+ * ЗАЧЕМ ПОДПИСКА, А НЕ ПРЯМОЙ ВЫЗОВ. Счётчику поездки нужен тот же поток
+ * точек, что уходит на сервер, — и на переднем плане, и в фоне. Но импорт
+ * счётчика прямо отсюда тянет за собой слой API и весь react-native: тесты
+ * этой службы перестали собираться в ту же минуту, как такой импорт
+ * появился. Здесь остаётся то, чем эта служба и была — низкоуровневый
+ * источник точек, — а знание о счётчике живёт в счётчике.
+ *
+ * Возвращает функцию отписки.
+ */
+export function onLocationPoint(listener: PointListener): () => void {
+  pointListeners.add(listener);
+  return () => {
+    pointListeners.delete(listener);
+  };
+}
+
+/**
+ * Раздать точку подписчикам.
+ *
+ * Ошибка подписчика не имеет права уронить отправку позиции: она важнее
+ * всего, что на этот поток подписано.
+ */
+function emitPoint(point: LocationPoint): void {
+  for (const listener of pointListeners) {
+    try {
+      listener(point);
+    } catch {
+      // Подписчик сам разберётся со своей бедой.
+    }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Буфер точек для батчевой отправки                                          */
 /* -------------------------------------------------------------------------- */
 
@@ -183,6 +226,7 @@ async function startForegroundTrackingImpl(
       // на карте в админке. REST-батч параллельно копит для истории.
       socketService.emitLocation(point);
       bufferPoint(point);
+      emitPoint(point);
     },
   );
 
@@ -351,6 +395,11 @@ export function toLocationPoints(locations: RawBackgroundLocation[]): LocationPo
  */
 export function handleBackgroundLocations(points: LocationPoint[]): void {
   if (points.length === 0) return;
+
+  // Подписчики (счётчик поездки, 1.5.46) получают точки и в фоне: пробег
+  // обязан считаться, когда экран погас, — водитель везёт клиента всю
+  // дорогу, а не только пока смотрит в карточку.
+  for (const point of points) emitPoint(point);
 
   for (const point of points) {
     try {

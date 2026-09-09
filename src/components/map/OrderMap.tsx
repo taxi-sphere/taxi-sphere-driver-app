@@ -40,11 +40,29 @@
  *   и компенсация угла стрелки — в `@/lib/map-orientation`, там же
  *   объяснено, почему до 1.5.42 карта была жёстко севером вверх.
  *
+ *   КАМЕРА ВЕДЁТ МАШИНУ (1.5.45). До этой версии камера двигалась ровно
+ *   дважды за поездку — и всё остальное время водитель ехал по неподвижной
+ *   карте, а стрелка уползала за край. Тем же корнем объяснялись ещё две
+ *   жалобы, выглядевшие отдельными: карта поворачивается вокруг СВОЕГО
+ *   центра, поэтому доворот по курсу выбрасывал стрелку с экрана тем
+ *   сильнее, чем дальше она от центра. Теперь камера едет за машиной, и
+ *   правило «чья сейчас камера» — в `@/lib/map-follow`.
+ *
+ *   ПОЧЕМУ В РЕЖИМЕ СЛЕЖЕНИЯ СТРЕЛКА — НЕ МЕТКА НА КАРТЕ. Метка стоит в
+ *   координате, а камера едет к ней анимацией: каждую секунду метка
+ *   оказывалась бы впереди центра и весь путь до него «догонялась». Вместо
+ *   этого стрелка рисуется НЕПОДВИЖНО в центре кадра, а под ней едет
+ *   дорога — как в любом навигаторе. Заодно исчезает целый класс ошибок:
+ *   стрелка, которой нет на карте, не может ни отстать от неё, ни уехать
+ *   за край. Метка возвращается ровно тогда, когда водитель забрал карту
+ *   себе, — и тогда ей и положено уходить за экран.
+ *
  * @dependencies: react-native-maps, react-native-svg, expo-location, expo-router,
  *   @/lib/theme, @/hooks/useOrderRoute, @/lib/map-fit, @/lib/heading,
- *   @/lib/route-snap, @/lib/map-orientation, @/stores/settings.store
+ *   @/lib/route-snap, @/lib/map-orientation, @/lib/map-follow,
+ *   @/stores/settings.store
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-08 (1.5.42 — режимы ориентации карты)
+ * @updated: 2026-09-08 (1.5.45 — камера следит за машиной, плавный ход)
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -59,16 +77,18 @@ import Svg, { Path } from 'react-native-svg';
 import { NIGHT_MAP_STYLE } from './night-map-style';
 import { DAY_MAP_STYLE } from './day-map-style';
 import { useOrderRoute } from '@/hooks/useOrderRoute';
+import { hasRealChoice } from '@/lib/route-choice';
+import { RouteChoiceBar } from '@/components/map/RouteChoiceBar';
 import { mapFitKey } from '@/lib/map-fit';
 import { bearingDegrees, distanceMeters, headingAlong, MIN_SPAN_M } from '@/lib/heading';
 import { routeAhead, snapToRoute } from '@/lib/route-snap';
+import { screenHeading, shouldTurnCamera, targetCameraHeading } from '@/lib/map-orientation';
 import {
-  angleDelta,
-  RESUME_COURSE_UP_M,
-  screenHeading,
-  shouldTurnCamera,
-  targetCameraHeading,
-} from '@/lib/map-orientation';
+  blendInterval,
+  followCameraDuration,
+  shouldResumeFollow,
+  type FollowInterrupt,
+} from '@/lib/map-follow';
 import { useSettingsStore } from '@/stores/settings.store';
 import type { CurrentOrder } from '@/types/order';
 
@@ -100,18 +120,28 @@ const ARROW_SIZE = 36;
 
 
 /**
- * Сколько длится доворот камеры.
+ * Как часто обновлять позицию водителя на карте.
  *
- * Мгновенный поворот читается как рывок и сбивает с толку; долгий —
- * отстаёт от машины в повороте. Треть секунды — примерно столько же, что
- * и у штатных навигаторов.
+ * СЕКУНДА, А НЕ ТРИ, И ЭТО ОСОЗНАННО ДОРОЖЕ. Плавность движения на карте
+ * задаёт не сглаживание, а темп фиксов: анимация камеры длится один интервал
+ * с запасом, и на трёх секундах любой рывок растягивается на три секунды
+ * вместе с ним. Это отдельная подписка от той, что шлёт координаты на сервер
+ * (`location.service`, 5 с): серверу секундный поток не нужен и стоил бы
+ * впятеро больше трафика, а карте нужен именно он.
+ *
+ * Цена ограничена тем, что подписка живёт только пока экран заказа ОТКРЫТ
+ * (см. `useFocusEffect` ниже) — ушёл на другую вкладку, и GPS в этой частоте
+ * выключился.
  */
-const CAMERA_TURN_MS = 300;
+const WATCH_INTERVAL_MS = 1000;
 
-
-/** Как часто обновлять позицию водителя на карте. */
-const WATCH_INTERVAL_MS = 3000;
-const WATCH_DISTANCE_M = 10;
+/**
+ * Порог смещения. Не ноль: стоящая машина шумит в пределах погрешности
+ * приёмника, и с нулём карта дрожала бы на парковке. Три метра этот шум
+ * отсекают и при этом не задают темп — их проезжают быстрее секунды на любой
+ * скорости выше 11 км/ч.
+ */
+const WATCH_DISTANCE_M = 3;
 
 export function OrderMap({
   order,
@@ -145,6 +175,59 @@ export function OrderMap({
     longitude: number;
   } | null>(null);
 
+  // Позиция водителя нужна и охвату, и перехвату слежения, но НЕ должна
+  // перезапускать их эффекты — поэтому лежит в ref. См. комментарий к fitKey.
+  const driverLocationRef = useRef(driverLocation);
+  driverLocationRef.current = driverLocation;
+
+  /**
+   * Ведёт ли камера машину.
+   *
+   * Стартуем с ВЫКЛЮЧЕННОГО слежения намеренно: при открытии заказа карта
+   * показывает весь маршрут (`fitAll`), и это правильный первый кадр —
+   * водитель видит, куда его отправили. Включи слежение сразу, и первый же
+   * фикс GPS отменил бы эту подгонку на полпути (`animateCamera` обрывает
+   * `fitToCoordinates` — поймано на эмуляторе 08.09.2026). Слежение включится
+   * само, когда водитель тронется: правило в `@/lib/map-follow`.
+   */
+  const [follow, setFollow] = useState(false);
+  const followRef = useRef(false);
+  followRef.current = follow;
+
+  /** Когда и откуда водитель забрал камеру себе. */
+  const interruptRef = useRef<FollowInterrupt | null>({ at: Date.now(), from: null });
+
+  /**
+   * Машина в тех же координатах, в каких её видит камера, — то есть уже снятая
+   * на дорогу.
+   *
+   * ЗАЧЕМ ОТДЕЛЬНО ОТ `driverLocationRef`. Правило возврата меряет, сколько
+   * машина проехала с момента жеста, и обе точки обязаны быть из одного
+   * источника. Возьми начало сырым, а конец снятым — и разница проекции (до
+   * `MAX_SNAP_M`, то есть до 50 метров) зачлась бы как проезд: камера
+   * возвращалась бы к стоящей машине сама, без единого метра пути.
+   */
+  const driverPointRef = useRef<{ latitude: number; longitude: number } | null>(null);
+
+  /** Сглаженный интервал между фиксами — из него берётся длительность анимации. */
+  const intervalRef = useRef<number | null>(null);
+  const lastFixAtRef = useRef<number | null>(null);
+
+  /**
+   * Забрать камеру у слежения.
+   *
+   * Одна дверь на все случаи — жест пальцем, кнопка общего плана, смена
+   * стадии заказа. До 1.5.45 у кнопки был свой механизм возврата, а жест не
+   * отслеживался вовсе; два ответа на один вопрос «чья камера» разъезжались.
+   */
+  const interruptFollow = useCallback(() => {
+    interruptRef.current = { at: Date.now(), from: driverPointRef.current };
+    if (followRef.current) {
+      followRef.current = false;
+      setFollow(false);
+    }
+  }, []);
+
   /**
    * Куда водитель едет — по его собственному перемещению.
    *
@@ -157,47 +240,80 @@ export function OrderMap({
   /** Точка, от которой отсчитывается следующий угол. */
   const headingAnchorRef = useRef<{ latitude: number; longitude: number } | null>(null);
 
-  // Отслеживание позиции водителя
-  useEffect(() => {
-    let subscription: Location.LocationSubscription | undefined;
+  /**
+   * Отслеживание позиции водителя — ТОЛЬКО пока экран заказа открыт.
+   *
+   * Секундный GPS нужен карте и никому больше. Раньше подписка висела всё
+   * время, пока смонтирован таб, то есть и когда водитель смотрит заработок
+   * или список заказов. Привязка к фокусу выключает её там, где она никому
+   * не показывает ни метра.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      let subscription: Location.LocationSubscription | undefined;
+      let cancelled = false;
 
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
+      (async () => {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted' || cancelled) return;
 
-      subscription = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          timeInterval: WATCH_INTERVAL_MS,
-          distanceInterval: WATCH_DISTANCE_M,
-        },
-        (loc) => {
-          const next = {
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-          };
+        const sub = await Location.watchPositionAsync(
+          {
+            // Навигационная точность, а не «High»: стрелка стоит на дороге и
+            // ведёт водителя в поворот, здесь метры имеют цену. Экран в это
+            // время и так горит (`keepScreenOn`), он дороже приёмника.
+            accuracy: Location.Accuracy.BestForNavigation,
+            timeInterval: WATCH_INTERVAL_MS,
+            distanceInterval: WATCH_DISTANCE_M,
+          },
+          (loc) => {
+            const next = {
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude,
+            };
 
-          // Курс считаем по пройденному отрезку, а НЕ берём `loc.coords.heading`:
-          // на серверной записи трека этот курс принимал два различных значения
-          // на 356 точек — приёмник его на городских скоростях просто не считает
-          // (тот же урок, что в админке, v1.99.84).
-          const anchor = headingAnchorRef.current;
-          if (!anchor) {
-            headingAnchorRef.current = next;
-          } else if (distanceMeters(anchor, next) >= MIN_SPAN_M) {
-            setMovementHeading(bearingDegrees(anchor, next));
-            headingAnchorRef.current = next;
-          }
+            // Темп съёмки меряем по факту, а не берём из настроек подписки:
+            // приёмник отдаёт когда может, и анимация должна равняться на
+            // реальный интервал, иначе карта встаёт между кадрами.
+            const now = Date.now();
+            const prevAt = lastFixAtRef.current;
+            if (prevAt != null) {
+              intervalRef.current = blendInterval(intervalRef.current, now - prevAt);
+            }
+            lastFixAtRef.current = now;
 
-          setDriverLocation(next);
-        },
-      );
-    })();
+            // Курс считаем по пройденному отрезку, а НЕ берём `loc.coords.heading`:
+            // на серверной записи трека этот курс принимал два различных значения
+            // на 356 точек — приёмник его на городских скоростях просто не считает
+            // (тот же урок, что в админке, v1.99.84).
+            const anchor = headingAnchorRef.current;
+            if (!anchor) {
+              headingAnchorRef.current = next;
+            } else if (distanceMeters(anchor, next) >= MIN_SPAN_M) {
+              setMovementHeading(bearingDegrees(anchor, next));
+              headingAnchorRef.current = next;
+            }
 
-    return () => {
-      subscription?.remove();
-    };
-  }, []);
+            setDriverLocation(next);
+          },
+        );
+
+        if (cancelled) {
+          sub.remove();
+          return;
+        }
+        subscription = sub;
+      })();
+
+      return () => {
+        cancelled = true;
+        subscription?.remove();
+        // Пауза в съёмке — не темп съёмки: иначе после возврата на экран
+        // первая же анимация растянулась бы на всё время отсутствия.
+        lastFixAtRef.current = null;
+      };
+    }, []),
+  );
 
   const route = useOrderRoute({
     orderId: order.id,
@@ -205,7 +321,9 @@ export function OrderMap({
     lat: driverLocation?.latitude,
     lng: driverLocation?.longitude,
   });
-  const routeCoords = route?.coordinates ?? NO_ROUTE;
+  // С 1.5.49 хук отдаёт не только линию, но и выбор варианта пути:
+  // `route.route` — то, что рисуем, остальное — управление выбором.
+  const routeCoords = route.route?.coordinates ?? NO_ROUTE;
 
   /**
    * Машина на дороге, а не там, куда её положил приёмник.
@@ -220,6 +338,7 @@ export function OrderMap({
     [driverLocation, routeCoords],
   );
   const driverPoint = snap?.point ?? driverLocation;
+  driverPointRef.current = driverPoint;
 
   /**
    * Куда развернуть стрелку водителя.
@@ -232,6 +351,10 @@ export function OrderMap({
    * `null`, и рисуется точка без направления, а не стрелка наугад на север.
    */
   const driverHeading = snap?.bearing ?? movementHeading ?? headingAlong(routeCoords);
+  // Курс нужен эффекту смены режима, но не должен его запускать: иначе он
+  // стал бы вторым хозяином камеры и оборвал бы анимацию слежения.
+  const driverHeadingRef = useRef(driverHeading);
+  driverHeadingRef.current = driverHeading;
 
   /**
    * Линия рисуется ОТ машины вперёд: пройденный хвост навигатор не
@@ -249,30 +372,32 @@ export function OrderMap({
   const [cameraHeading, setCameraHeading] = useState(0);
 
   /**
-   * Откуда водитель попросил общий план.
-   *
-   * Кнопка разворачивает карту севером вверх, и держать этот вид надо,
-   * пока водитель на него смотрит. Возвращаем поворот, когда он поехал
-   * дальше — по пройденному расстоянию, а не по времени: стоящий в пробке
-   * не должен терять обзор через десять секунд.
+   * Куда камера повёрнута ПРЯМО СЕЙЧАС — то есть куда её довели последней
+   * командой. Отдельный ref нужен, потому что состояние обновляется не на
+   * каждый фикс (порог гасит дрожание курса), а сравнивать надо с последним
+   * ОТПРАВЛЕННЫМ значением, а не с последним отрисованным.
    */
-  const overviewFromRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const appliedHeadingRef = useRef(0);
 
+  /** Центр, отправленный камере последней командой. */
+  const lastCenterRef = useRef<{ latitude: number; longitude: number } | null>(null);
 
   /**
    * Угол стрелки НА ЭКРАНЕ: курс минус поворот карты. В режиме «по курсу»
    * камера довёрнута под машину, и стрелка смотрит вверх; в режиме «север
    * сверху» — по курсу, как было до 1.5.42.
+   *
+   * ОТКУДА БРАЛСЯ РЫВОК ДО 1.5.45. `cameraHeading` выставлялся в целевое
+   * значение СРАЗУ, а карта доворачивалась триста миллисекунд — и всё это
+   * время угол стрелки был посчитан под поворот, которого ещё не случилось:
+   * стрелка вскидывалась вверх, пока дорога под ней лежала по-старому. В
+   * режиме слежения этого больше не может произойти в принципе: стрелка
+   * нарисована в центре кадра, а не в координате, и в режиме «по курсу»
+   * всегда смотрит вверх.
    */
   const hasHeading = driverHeading != null;
   const arrowHeading = hasHeading ? screenHeading(driverHeading, cameraHeading) : 0;
 
-
-  // Позиция водителя в охвате нужна, но НЕ должна его перезапускать —
-  // поэтому лежит в ref, а не в зависимостях эффекта. См. комментарий к
-  // fitKey ниже.
-  const driverLocationRef = useRef(driverLocation);
-  driverLocationRef.current = driverLocation;
 
   /**
    * Подогнать карту так, чтобы влезли все точки и линия маршрута.
@@ -350,6 +475,11 @@ export function OrderMap({
   });
 
   useEffect(() => {
+    // Подгонка охвата — это тоже «камера не у слежения»: иначе первый же фикс
+    // GPS оборвал бы её на полпути. Перехват заодно даёт правильное поведение
+    // на смене стадии: водитель видит новый участок целиком, а как тронулся —
+    // карта снова ведёт.
+    interruptFollow();
     fitAll();
     // fitAll намеренно НЕ в зависимостях: он пересоздаётся при каждом новом
     // маршруте, и эффект снова стал бы срабатывать на движение.
@@ -357,35 +487,96 @@ export function OrderMap({
   }, [fitKey]);
 
   /**
-   * Доворот камеры под курс.
+   * Камера ведёт машину: центр и поворот — ОДНОЙ командой на каждый фикс.
    *
-   * Порог обязателен: курс шумит, и без него карта мелко трясётся на
-   * каждом фиксе GPS. В режиме «север сверху» доворачивать нечего — просто
-   * возвращаем ноль, если он был сбит.
+   * ПОЧЕМУ ОДНОЙ. Две команды на одну камеру всегда обрывают друг друга —
+   * это тот же урок, что записан у `fitAll`. Сдвиг центра и доворот приходят
+   * в один и тот же момент (обновилась позиция), так что разделить их
+   * означало бы гарантированную гонку.
+   *
+   * ПОЧЕМУ ДЛИТЕЛЬНОСТЬ СЧИТАЕТСЯ, А НЕ ЗАДАНА КОНСТАНТОЙ. Плавность даёт не
+   * длина анимации сама по себе, а то, что следующая начинается раньше, чем
+   * закончилась предыдущая. Постоянные 300 мс при фиксах раз в секунду
+   * означали бы 700 мс неподвижной карты между кадрами — ровно те «рывки», на
+   * которые жалуется водитель. Правило запаса — в `@/lib/map-follow`.
+   *
+   * ПОЧЕМУ ПОРОГ ОСТАЛСЯ. Он больше не решает, поворачивать ли: центр едет в
+   * любом случае, и поворот едет вместе с ним. Он решает только, менять ли
+   * ЦЕЛЬ — иначе карта мелко качалась бы вслед за дрожанием курса.
+   *
+   * ВОЗВРАТ СЛЕЖЕНИЯ проверяется здесь же, а не по таймеру, и это не
+   * экономия: фиксы приходят только когда машина едет (порог смещения), а
+   * правило возврата как раз и требует, чтобы она ехала. Стоящая машина не
+   * рождает событий — и её карта остаётся у водителя сама собой.
    */
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    // Пока водитель смотрит общий план — не отнимать его поворотом.
-    const overviewFrom = overviewFromRef.current;
-    if (overviewFrom) {
-      if (!driverPoint || distanceMeters(overviewFrom, driverPoint) < RESUME_COURSE_UP_M) {
-        return;
+    if (!follow) {
+      // Перехват мог случиться до того, как приёмник дал первую точку
+      // (открытие экрана) — тогда отсчёт расстояния начинается отсюда.
+      const interrupt = interruptRef.current;
+      if (interrupt && !interrupt.from && driverPoint) interrupt.from = driverPoint;
+
+      if (shouldResumeFollow(interruptRef.current, Date.now(), driverPoint)) {
+        interruptRef.current = null;
+        setFollow(true);
       }
-      overviewFromRef.current = null;
+      return;
+    }
+    if (!driverPoint) return;
+
+    const applied = appliedHeadingRef.current;
+    const target = targetCameraHeading(mapOrientation, driverHeading);
+    const heading = shouldTurnCamera(applied, target) ? target : applied;
+
+    // Тот же кадр второй раз не отправляем. Иначе перестроение линии маршрута
+    // (раз в 60–110 м) пересобирало бы `driverPoint` новой ссылкой на те же
+    // координаты — и рестартовало анимацию с полпути, что как раз и читается
+    // как подёргивание.
+    const last = lastCenterRef.current;
+    const sameCenter =
+      last != null &&
+      last.latitude === driverPoint.latitude &&
+      last.longitude === driverPoint.longitude;
+    if (sameCenter && heading === applied) return;
+    lastCenterRef.current = driverPoint;
+
+    if (heading !== applied) {
+      appliedHeadingRef.current = heading;
+      // Состояние нужно ТОЛЬКО отпущенной камере — метке водителя. В
+      // зависимости эффекта его класть нельзя: он бы перезапускал сам себя и
+      // слал вторую анимацию на тот же кадр.
+      setCameraHeading(heading);
     }
 
-    const needTurn =
-      mapOrientation === 'course'
-        ? shouldTurnCamera(cameraHeading, driverHeading)
-        : Math.abs(angleDelta(cameraHeading, 0)) > 0.5;
-    if (!needTurn) return;
+    map.animateCamera(
+      { center: driverPoint, heading },
+      { duration: followCameraDuration(intervalRef.current) },
+    );
+  }, [follow, mapOrientation, driverHeading, driverPoint]);
 
-    const target = targetCameraHeading(mapOrientation, driverHeading);
-    map.animateCamera({ heading: target }, { duration: CAMERA_TURN_MS });
-    setCameraHeading(target);
-  }, [mapOrientation, driverHeading, cameraHeading, driverPoint]);
+  /**
+   * Смена режима ориентации действует сразу — даже если камера отпущена.
+   *
+   * Слежение доворачивает карту только пока оно включено. Водитель, который
+   * отодвинул карту пальцем, зашёл в настройки и переключил «север сверху»,
+   * без этого эффекта вернулся бы на карту, повёрнутую по старому курсу, и
+   * ждал бы тридцати метров пути, чтобы настройка подействовала. Переключение
+   * режима — сознательное действие, на него карта отвечает немедленно.
+   *
+   * Зависимость ровно одна: реагируем на смену РЕЖИМА, а не на каждый градус
+   * курса, иначе эффект превратился бы во второго хозяина камеры.
+   */
+  useEffect(() => {
+    if (followRef.current) return;
+    const heading = targetCameraHeading(mapOrientation, driverHeadingRef.current);
+    if (heading === appliedHeadingRef.current) return;
+    appliedHeadingRef.current = heading;
+    setCameraHeading(heading);
+    mapRef.current?.setCamera({ heading });
+  }, [mapOrientation]);
 
   /**
    * Кнопка «показать весь маршрут».
@@ -405,15 +596,47 @@ export function OrderMap({
    * `camera`: одноимённый нативный сеттер собирает позицию С НУЛЯ, так что
    * частичное значение отправило бы карту в точку (0, 0).)
    *
-   * Запоминаем и место: пока водитель не проехал `RESUME_COURSE_UP_M`,
-   * карта держит общий план и не разворачивается обратно по курсу.
+   * Слежение при этом просто перехватывается — теми же правилами, что и
+   * жестом пальцем. До 1.5.45 у кнопки был свой механизм возврата, знавший
+   * только про поворот: общий план после неё держался вечно, потому что
+   * центр никто не возвращал.
    */
   const handleOverview = useCallback(() => {
-    overviewFromRef.current = driverLocationRef.current;
+    interruptFollow();
     mapRef.current?.setCamera({ heading: 0 });
+    appliedHeadingRef.current = 0;
     setCameraHeading(0);
     fitAll(true);
-  }, [fitAll]);
+  }, [fitAll, interruptFollow]);
+
+  /**
+   * Жест по карте забирает камеру у слежения.
+   *
+   * Два обработчика, а не один: `onPanDrag` ловит перетаскивание, а
+   * `isGesture` в `onRegionChangeComplete` — щипок и двойное касание, которые
+   * перетаскиванием не считаются. Своя же анимация приходит сюда с
+   * `isGesture: false` и слежение не рвёт.
+   */
+  const handleUserGesture = useCallback(() => {
+    // Без проверки «а следим ли сейчас» намеренно: перехват обновляет отметку
+    // времени и точку, поэтому отсчёт возврата идёт от ПОСЛЕДНЕГО касания.
+    // Иначе водитель, который десять секунд возит карту пальцем, получал бы
+    // её обратно через две.
+    interruptFollow();
+  }, [interruptFollow]);
+
+  const handleRegionChangeComplete = useCallback(
+    (_region: unknown, details?: { isGesture?: boolean }) => {
+      if (details?.isGesture) handleUserGesture();
+    },
+    [handleUserGesture],
+  );
+
+  /** Кнопка «вернуть камеру к машине» — мгновенно, без ожидания правила. */
+  const handleRecenter = useCallback(() => {
+    interruptRef.current = null;
+    setFollow(true);
+  }, []);
 
   const hasPickup = order.pickupLat != null && order.pickupLng != null;
   const hasDropoff = order.dropoffLat != null && order.dropoffLng != null;
@@ -461,6 +684,10 @@ export function OrderMap({
         // случайные касания двумя пальцами кладут карту набок.
         rotateEnabled={false}
         pitchEnabled={false}
+        // Любой жест водителя забирает камеру у слежения — это и есть его
+        // право отодвинуть карту и посмотреть, что впереди.
+        onPanDrag={handleUserGesture}
+        onRegionChangeComplete={handleRegionChangeComplete}
       >
         {lineCoords.length >= 2 && (
           <>
@@ -483,7 +710,11 @@ export function OrderMap({
           </>
         )}
 
-        {driverPoint && (
+        {/* Метка нужна ТОЛЬКО когда камера отпущена. В слежении машина
+            нарисована неподвижно в центре кадра (см. шапку файла): метка там
+            каждую секунду оказывалась бы впереди центра и догоняла его всю
+            анимацию. */}
+        {!follow && driverPoint && (
           <Marker
             key={`driver-${markerEpoch}`}
             coordinate={driverPoint}
@@ -558,6 +789,44 @@ export function OrderMap({
         )}
       </MapView>
 
+      {/* Машина в режиме слежения: неподвижно в центре кадра, дорога едет под
+          ней. Центр кадра — не центр видимой части: снизу карту накрывает
+          шторка, поэтому геометрическая середина приходится примерно на
+          четыре пятых видимой полосы, и впереди машины остаётся ровно то
+          место, куда водитель смотрит. */}
+      {follow && driverPoint && (
+        <View pointerEvents="none" style={styles.followArrow}>
+          <DriverArrow
+            color={theme.colors.primary}
+            hasHeading={hasHeading}
+            rotation={arrowHeading}
+          />
+        </View>
+      )}
+
+      {/* Вернуть камеру машине немедленно, не дожидаясь правила возврата.
+          Показывается только когда есть что возвращать — постоянная кнопка
+          «я здесь» на карте, которая и так следит, читалась бы как поломка. */}
+      {!follow && (
+        <Pressable
+          onPress={handleRecenter}
+          accessibilityRole="button"
+          accessibilityLabel="Вернуть карту к машине"
+          hitSlop={8}
+          style={({ pressed }) => [
+            styles.fitButton,
+            styles.recenterButton,
+            {
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.border,
+              opacity: pressed ? 0.7 : 1,
+            },
+          ]}
+        >
+          <Ionicons name="locate" size={20} color={theme.colors.textPrimary} />
+        </Pressable>
+      )}
+
       {/* Вернуть общий план. Появилась вместе с отказом от автомасштаба на
           каждую точку (1.5.37): раньше карта возвращалась сама, теперь это
           решение водителя. Справа сверху — слева над картой стоят вкладки
@@ -578,6 +847,18 @@ export function OrderMap({
       >
         <Ionicons name="scan-outline" size={20} color={theme.colors.textPrimary} />
       </Pressable>
+
+      {/* Выбор варианта пути (MOB-024). Показывается, только когда пути
+          расходятся ощутимо: `hasRealChoice` отсеивает объезд одного двора,
+          ради которого отвлекать водителя за рулём не стоит. */}
+      {(hasRealChoice(route.route?.routes ?? []) || route.chosen) && (
+        <RouteChoiceBar
+          variants={route.route?.routes ?? []}
+          chosen={route.chosen}
+          onChoose={route.choose}
+          bottomInset={bottomInset}
+        />
+      )}
     </View>
   );
 }
@@ -595,10 +876,23 @@ export function OrderMap({
  * Без курса рисуется точка с обводкой — как «вы здесь» в картах, когда
  * направление неизвестно. Стрелка наугад на север врала бы.
  *
- * Сам шеврон всегда нарисован «вверх»: за угол отвечает карта (`flat` +
- * `rotation` у маркера), а не эта разметка.
+ * УГОЛ ЗАДАЁТСЯ ДВУМЯ РАЗНЫМИ СПОСОБАМИ, И ЭТО НЕ ДУБЛИРОВАНИЕ. Меткой на
+ * карте шеврон поворачивает нативный проп `rotation` — по причине, описанной
+ * в `@/lib/map-orientation` (разметку Android держит растром и о повороте не
+ * узнаёт). Неподвижной стрелке в центре кадра карта не помогает ничем: она не
+ * метка, поэтому угол ей передаётся пропом и применяется трансформом. В
+ * режиме «по курсу» он равен нулю — камера уже довёрнута под машину.
  */
-function DriverArrow({ color, hasHeading }: { color: string; hasHeading: boolean }) {
+function DriverArrow({
+  color,
+  hasHeading,
+  rotation = 0,
+}: {
+  color: string;
+  hasHeading: boolean;
+  /** Угол на экране, градусы. 0 — шеврон смотрит вверх. */
+  rotation?: number;
+}) {
   const theme = useTheme();
 
   if (!hasHeading) {
@@ -612,7 +906,7 @@ function DriverArrow({ color, hasHeading }: { color: string; hasHeading: boolean
   // высоты схлопывается: на эмуляторе стрелка выходила размером в несколько
   // пикселей — видно, что что-то нарисовано, и не видно что.
   return (
-    <View style={styles.arrow}>
+    <View style={[styles.arrow, { transform: [{ rotate: `${rotation}deg` }] }]}>
       <Svg width={ARROW_SIZE} height={ARROW_SIZE} viewBox="0 0 32 32">
         <Path
           d="M16 2 L24 27 L16 21 L8 27 Z"
@@ -675,6 +969,19 @@ const styles = StyleSheet.create({
     height: ARROW_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // Машина в режиме слежения. Растягиваем на весь кадр и центрируем
+  // содержимое — так стрелка стоит ровно там, куда смотрит камера, и не
+  // зависит ни от высоты экрана, ни от шторки.
+  followArrow: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Под кнопкой общего плана: обе управляют камерой, и держать их рядом
+  // понятнее, чем разносить по углам.
+  recenterButton: {
+    top: 60,
   },
   // «Вы здесь» без направления — точка, как в картах.
   dot: {
