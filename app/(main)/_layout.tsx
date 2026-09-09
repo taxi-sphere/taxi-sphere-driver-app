@@ -6,7 +6,7 @@
  * @dependencies: expo-router, connection.store, settings.store,
  *                @/lib/theme, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-07 (1.5.38 — заглушка «нет подключения» после двух неудач подряд, не после одной)
+ * @updated: 2026-09-09 (1.5.52 — экраны истории заказов и переписки с диспетчером)
  */
 
 import { useEffect, useCallback, useRef, useState } from 'react';
@@ -149,6 +149,20 @@ function MainStack() {
         options={{
           headerShown: true,
           headerTitle: 'Вывод средств',
+        }}
+      />
+      <Stack.Screen
+        name="history/index"
+        options={{
+          headerShown: true,
+          headerTitle: 'История заказов',
+        }}
+      />
+      <Stack.Screen
+        name="chat/index"
+        options={{
+          headerShown: true,
+          headerTitle: 'Диспетчер',
         }}
       />
     </Stack>

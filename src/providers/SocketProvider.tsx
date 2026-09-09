@@ -7,13 +7,14 @@
  *   Инвалидирует React Query при получении событий.
  * @dependencies: socket.service, auth.store, token.service, @tanstack/react-query
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-17 10:00:00
+ * @updated: 2026-09-09 (1.5.52 — сообщения диспетчера: бейдж и уведомление)
  */
 
 import { useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth.store';
+import { useChatStore } from '@/stores/chat.store';
 import { socketService } from '@/services/socket.service';
 import { showLocalNotification } from '@/services/notification.service';
 import * as tokenService from '@/services/token.service';
@@ -203,6 +204,31 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       );
     });
 
+    /**
+     * Сообщение от диспетчера.
+     *
+     * Подписка живёт здесь, а не на экране чата: бейдж непрочитанных
+     * должен загораться, даже если водитель за смену ни разу этот экран не
+     * открывал, — а экран, смонтированный сейчас, увидит новое сообщение
+     * через инвалидацию кэша.
+     *
+     * Счётчик прибавляется ТОЛЬКО чужому сообщению: своё же, вернувшееся
+     * эхом, сделало бы непрочитанным собственный вопрос.
+     */
+    const unsubChat = socketService.onChatMessage((data) => {
+      void queryClient.invalidateQueries({ queryKey: ['chat'] });
+      if (data?.authorRole === 'driver') return;
+
+      useChatStore.getState().noteIncoming();
+      if (AppState.currentState !== 'active') {
+        void showLocalNotification(
+          data?.adminName ? `Диспетчер ${data.adminName}` : 'Сообщение от диспетчера',
+          data?.message || 'Открыть переписку',
+          { type: 'chat_message' },
+        );
+      }
+    });
+
     return () => {
       unsubConnectError();
       unsubConnected();
@@ -210,6 +236,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       unsubStatus();
       unsubCanceled();
       unsubBalance();
+      unsubChat();
       socketService.disconnect();
     };
   }, [accessToken, queryClient]);

@@ -18,7 +18,7 @@
  *   этот экран на неё не реагировал, как и остальные шестнадцать.
  *
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-09 (1.5.51 — переключатель слежения за машиной)
+ * @updated: 2026-09-09 (1.5.52 — убраны переключатели, которые ничего не делали)
  */
 
 import { useState } from 'react';
@@ -85,9 +85,7 @@ export default function SettingsScreen() {
   const styles = useThemedStyles(createStyles);
   const {
     serverUrl,
-    soundEnabled,
     vibrationEnabled,
-    voiceAlerts,
     preferredNavigator,
     themeMode,
     betaChannel,
@@ -96,9 +94,7 @@ export default function SettingsScreen() {
     setAutoFollowMap,
     mapOrientation,
     setServerUrl,
-    setSoundEnabled,
     setVibrationEnabled,
-    setVoiceAlerts,
     setPreferredNavigator,
     setThemeMode,
     setBetaChannel,
@@ -181,20 +177,19 @@ export default function SettingsScreen() {
   return (
     <Screen edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
+        {/* «Звук» и «Голосовые оповещения» убраны в 1.5.52: оба
+          * переключателя ничего не делали — значение сохранялось в
+          * настройках и не читалось нигде. Переключатель, который врёт,
+          * хуже отсутствующего: водитель считал, что звук включён, и не
+          * понимал, почему заказ приходит молча. Звуковой сигнал заведён
+          * отдельной задачей (MOB-046) — он требует звукового файла и
+          * решения про громкость поверх музыки в машине. */}
         <Section title="Уведомления">
-          <SettingSwitch label="Звук" value={soundEnabled} onValueChange={setSoundEnabled} />
-          <Divider />
           <SettingSwitch
             label="Вибрация"
             hint="Подтверждение нажатий и сигнал о новом заказе"
             value={vibrationEnabled}
             onValueChange={setVibrationEnabled}
-          />
-          <Divider />
-          <SettingSwitch
-            label="Голосовые оповещения"
-            value={voiceAlerts}
-            onValueChange={setVoiceAlerts}
           />
         </Section>
 

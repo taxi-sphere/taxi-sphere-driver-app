@@ -5,7 +5,7 @@
  *   Персистенция через AsyncStorage.
  * @dependencies: zustand, @react-native-async-storage/async-storage
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-09 (1.5.51 — настройка «Карта едет за машиной»)
+ * @updated: 2026-09-09 (1.5.52 — убраны неработавшие «Звук» и «Голосовые оповещения»)
  */
 
 import { create } from 'zustand';
@@ -18,9 +18,19 @@ type ThemeMode = 'light' | 'dark' | 'system';
 
 interface SettingsState {
   serverUrl: string;
-  soundEnabled: boolean;
+  /**
+   * 1.5.52: `soundEnabled` и `voiceAlerts` УДАЛЕНЫ.
+   *
+   * Оба хранились с первой версии и не читались нигде: переключатели в
+   * настройках меняли значение в этом хранилище, и на этом всё
+   * заканчивалось. Водитель считал, что звук включён, а заказ приходил
+   * молча. Сохранённые значения остаются в AsyncStorage мёртвым грузом —
+   * `persist` лишние ключи молча игнорирует, так что чистить их незачем.
+   *
+   * Звуковой сигнал о заказе заведён задачей MOB-046: он требует
+   * звукового файла в сборке и решения, как звучать поверх музыки.
+   */
   vibrationEnabled: boolean;
-  voiceAlerts: boolean;
   preferredNavigator: NavigatorApp;
   themeMode: ThemeMode;
   lastPhone: string;
@@ -68,9 +78,7 @@ interface SettingsState {
   mapOrientation: MapOrientation;
 
   setServerUrl: (url: string) => void;
-  setSoundEnabled: (enabled: boolean) => void;
   setVibrationEnabled: (enabled: boolean) => void;
-  setVoiceAlerts: (enabled: boolean) => void;
   setPreferredNavigator: (nav: NavigatorApp) => void;
   setThemeMode: (mode: ThemeMode) => void;
   setLastPhone: (phone: string) => void;
@@ -84,9 +92,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       serverUrl: '',
-      soundEnabled: true,
       vibrationEnabled: true,
-      voiceAlerts: false,
       preferredNavigator: 'yandex',
       themeMode: 'system',
       lastPhone: '',
@@ -96,9 +102,7 @@ export const useSettingsStore = create<SettingsState>()(
       mapOrientation: 'course',
 
       setServerUrl: (serverUrl) => set({ serverUrl }),
-      setSoundEnabled: (soundEnabled) => set({ soundEnabled }),
       setVibrationEnabled: (vibrationEnabled) => set({ vibrationEnabled }),
-      setVoiceAlerts: (voiceAlerts) => set({ voiceAlerts }),
       setPreferredNavigator: (preferredNavigator) =>
         set({ preferredNavigator }),
       setThemeMode: (themeMode) => set({ themeMode }),

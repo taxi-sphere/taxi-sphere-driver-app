@@ -5,7 +5,7 @@
  *   Управляет подключением, переподключением, подпиской на события.
  * @dependencies: socket.io-client, connection.store
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-09-09 (1.5.52 — подписка на chat:message)
  */
 
 import { io, type Socket } from 'socket.io-client';
@@ -204,6 +204,26 @@ class SocketService {
   /** Подписка на событие «баланс изменился» */
   onBalanceChanged<T>(callback: EventCallback<T>): () => void {
     return this.subscribe('balance:changed', callback);
+  }
+
+  /**
+   * Сообщение от диспетчера (1.5.52).
+   *
+   * Событие сервер шлёт с марта — админский чат вызывает `emitToDriver`
+   * при каждой отправке. Подписчика на него не было: приложение не имело
+   * ни экрана чата, ни обработчика, и сообщения диспетчера доходили до
+   * телефона ровно до этой строки, дальше пропадая.
+   */
+  onChatMessage(
+    callback: EventCallback<{
+      id: string;
+      message: string;
+      authorRole: 'admin' | 'driver';
+      adminName?: string | null;
+      createdAt: string;
+    }>,
+  ): () => void {
+    return this.subscribe('chat:message', callback);
   }
 
   /**

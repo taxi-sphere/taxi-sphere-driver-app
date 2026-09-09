@@ -31,7 +31,7 @@
  *                location.service, driver.store, @/lib/theme,
  *                @/lib/haptics, @/components/ui
  * @created: 2026-03-18 06:00:00
- * @updated: 2026-09-01 (v1.5.17 — редизайн, тема, зоны нажатия)
+ * @updated: 2026-09-09 (1.5.52 — история заказов и чат с бейджем непрочитанных)
  */
 
 import { useEffect, useRef, useMemo } from 'react';
@@ -57,6 +57,7 @@ import {
   stopForegroundTracking,
 } from '@/services/location.service';
 import { useDriverStore } from '@/stores/driver.store';
+import { useChatUnread } from '@/hooks/useDriverChat';
 import { driverLogger } from '@/services/logger.service';
 import { haptics } from '@/lib/haptics';
 import {
@@ -97,6 +98,14 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
     queryFn: getProfile,
     staleTime: 5 * 60_000,
   });
+
+  /**
+   * Непрочитанные в переписке — считаются, даже пока меню закрыто.
+   *
+   * Меню смонтировано всё время работы приложения (оно живёт в шапке), и
+   * это единственное место, откуда бейдж виден без открытия чата.
+   */
+  const unreadChat = useChatUnread();
 
   // Жест закрытия свайпом влево. Подхватываем горизонтальный swipe
   // (dx < 0) минимум на 50px ИЛИ с быстрой скоростью — и закрываем.
@@ -332,6 +341,20 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
             label="Деньги"
             onPress={() => navigate('/(main)/(tabs)/earnings')}
           />
+          {/* История и чат (1.5.52). До них водитель не видел ни одной
+            * своей прошлой поездки, а сообщения диспетчера доходили до
+            * телефона и пропадали: экрана для них не существовало. */}
+          <MenuItem
+            icon="time-outline"
+            label="История заказов"
+            onPress={() => navigate('/(main)/history')}
+          />
+          <MenuItem
+            icon="chatbubbles-outline"
+            label="Диспетчер"
+            badge={unreadChat}
+            onPress={() => navigate('/(main)/chat')}
+          />
           <MenuItem
             icon="person-outline"
             label="Профиль"
@@ -368,12 +391,15 @@ function MenuItem({
   onPress,
   tint,
   showChevron = true,
+  badge = 0,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   onPress: () => void;
   tint?: string;
   showChevron?: boolean;
+  /** Сколько непрочитанного. Ноль — метки нет вовсе. */
+  badge?: number;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -384,7 +410,7 @@ function MenuItem({
       style={({ pressed }) => [styles.menuItem, pressed && { backgroundColor: colors.surfaceSunken }]}
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={badge > 0 ? `${label}, непрочитанных: ${badge}` : label}
     >
       <View style={[styles.menuIcon, { backgroundColor: colors.surfaceSunken }]}>
         <Ionicons name={icon} size={iconTokens.md} color={color} />
@@ -392,6 +418,13 @@ function MenuItem({
       <AppText variant="body" style={{ color, flex: 1 }}>
         {label}
       </AppText>
+      {badge > 0 ? (
+        <View style={[styles.menuBadge, { backgroundColor: colors.danger }]}>
+          <AppText variant="caption" weight="700" style={{ color: colors.textInverse }}>
+            {badge > 99 ? '99+' : badge}
+          </AppText>
+        </View>
+      ) : null}
       {showChevron && (
         <Ionicons name="chevron-forward" size={iconTokens.sm} color={colors.textMuted} />
       )}
@@ -468,6 +501,15 @@ const createStyles = (t: Theme) =>
       borderRadius: radius.sm,
       alignItems: 'center',
       justifyContent: 'center',
+    },
+    menuBadge: {
+      minWidth: 22,
+      height: 22,
+      borderRadius: 11,
+      paddingHorizontal: spacing.xs,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: spacing.xs,
     },
     separator: {
       marginHorizontal: spacing.lg,
