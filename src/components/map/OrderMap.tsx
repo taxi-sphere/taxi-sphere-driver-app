@@ -62,7 +62,7 @@
  *   @/lib/route-snap, @/lib/map-orientation, @/lib/map-follow,
  *   @/stores/settings.store
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-08 (1.5.45 — камера следит за машиной, плавный ход)
+ * @updated: 2026-09-09 (1.5.51 — стрелка не разворачивается на шуме, настройка слежения)
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -80,7 +80,15 @@ import { useOrderRoute } from '@/hooks/useOrderRoute';
 import { hasRealChoice } from '@/lib/route-choice';
 import { RouteChoiceBar } from '@/components/map/RouteChoiceBar';
 import { mapFitKey } from '@/lib/map-fit';
-import { bearingDegrees, distanceMeters, headingAlong, MIN_SPAN_M } from '@/lib/heading';
+import {
+  bearingDegrees,
+  distanceMeters,
+  headingAlong,
+  isSnapBearingSane,
+  limitTurn,
+  MIN_SPAN_M,
+  MIN_SPEED_MPS,
+} from '@/lib/heading';
 import { routeAhead, snapToRoute } from '@/lib/route-snap';
 import { screenHeading, shouldTurnCamera, targetCameraHeading } from '@/lib/map-orientation';
 import {
@@ -153,6 +161,14 @@ export function OrderMap({
   const mapRef = useRef<MapView>(null);
   const theme = useTheme();
   const mapOrientation = useSettingsStore((s) => s.mapOrientation);
+  const autoFollowMap = useSettingsStore((s) => s.autoFollowMap);
+  /**
+   * Настройка нужна эффекту камеры, но НЕ должна его перезапускать: он
+   * ведёт анимацию слежения, и лишний прогон оборвал бы её на полпути.
+   * Тот же приём, что у `followRef` и `driverLocationRef` выше.
+   */
+  const autoFollowRef = useRef(autoFollowMap);
+  autoFollowRef.current = autoFollowMap;
 
   /**
    * Поколение меток: меняется каждый раз, когда экран получает фокус.
@@ -286,11 +302,32 @@ export function OrderMap({
             // на серверной записи трека этот курс принимал два различных значения
             // на 356 точек — приёмник его на городских скоростях просто не считает
             // (тот же урок, что в админке, v1.99.84).
+            /**
+             * ПОРОГ СКОРОСТИ, А НЕ ТОЛЬКО РАССТОЯНИЯ (1.5.51).
+             *
+             * Стоящая машина всё равно «ползёт» по координатам: приёмник
+             * шумит, и за минуту на светофоре набегает больше пятнадцати
+             * метров случайного блуждания — расстояние наберётся, а
+             * направление у него будет произвольное. Так стрелка и
+             * разворачивалась на 180° у машины, едущей прямо.
+             *
+             * `speed` в expo-location — метры в секунду; `-1` или
+             * `undefined` означает «приёмник не знает», и тогда решает
+             * только расстояние, как раньше.
+             */
+            const speed = loc.coords.speed;
+            const movingFast = speed == null || speed < 0 || speed >= MIN_SPEED_MPS;
+
             const anchor = headingAnchorRef.current;
             if (!anchor) {
               headingAnchorRef.current = next;
-            } else if (distanceMeters(anchor, next) >= MIN_SPAN_M) {
-              setMovementHeading(bearingDegrees(anchor, next));
+            } else if (movingFast && distanceMeters(anchor, next) >= MIN_SPAN_M) {
+              // Резкие скачки сглаживаем: машина не разворачивается за секунду.
+              setMovementHeading((prev) => limitTurn(prev, bearingDegrees(anchor, next)));
+              headingAnchorRef.current = next;
+            } else if (!movingFast) {
+              // Машина стоит — начинаем отсчёт заново с текущей точки, иначе
+              // накопленное за стоянку блуждание сойдёт за поездку.
               headingAnchorRef.current = next;
             }
 
@@ -350,7 +387,22 @@ export function OrderMap({
    * построен по дорогам от водителя и показывает, куда ехать. Нет ничего —
    * `null`, и рисуется точка без направления, а не стрелка наугад на север.
    */
-  const driverHeading = snap?.bearing ?? movementHeading ?? headingAlong(routeCoords);
+  /**
+   * ПРОЕКЦИЯ НА МАРШРУТ — ХОРОШИЙ ИСТОЧНИК КУРСА, НО НЕ БЕЗУСЛОВНЫЙ.
+   *
+   * Она даёт курс того куска дороги, к которому машина оказалась ближе
+   * всего, — а на двусторонней улице, на развязке и на устаревшей линии
+   * этот кусок бывает ВСТРЕЧНЫМ. Тогда стрелка честно показывает назад,
+   * пока водитель едет вперёд (жалоба владельца 09.09.2026).
+   *
+   * Собственное перемещение так не врёт: оно измерено, а не выбрано. Если
+   * проекция расходится с ним больше чем на 120°, верим перемещению.
+   */
+  const snapBearing =
+    snap?.bearing != null && isSnapBearingSane(snap.bearing, movementHeading)
+      ? snap.bearing
+      : null;
+  const driverHeading = snapBearing ?? movementHeading ?? headingAlong(routeCoords);
   // Курс нужен эффекту смены режима, но не должен его запускать: иначе он
   // стал бы вторым хозяином камеры и оборвал бы анимацию слежения.
   const driverHeadingRef = useRef(driverHeading);
@@ -519,7 +571,21 @@ export function OrderMap({
       const interrupt = interruptRef.current;
       if (interrupt && !interrupt.from && driverPoint) interrupt.from = driverPoint;
 
-      if (shouldResumeFollow(interruptRef.current, Date.now(), driverPoint)) {
+      /**
+       * САМО СЛЕЖЕНИЕ ВКЛЮЧАЕТСЯ, ТОЛЬКО ЕСЛИ ВОДИТЕЛЬ ЭТОГО ХОЧЕТ (1.5.51).
+       *
+       * По умолчанию хочет — так приложение и вело себя с 1.5.45. Но у
+       * части водителей телефон работает обзорной картой: они отодвигают
+       * её, чтобы посмотреть обстановку, а слежение забирает камеру назад
+       * через полтораста метров. Настройка «Карта едет за машиной» гасит
+       * именно ЭТОТ автоматический возврат; кнопка с прицелом продолжает
+       * включать слежение по нажатию — и становится не «вернуть», а
+       * «вести».
+       */
+      if (
+        autoFollowRef.current &&
+        shouldResumeFollow(interruptRef.current, Date.now(), driverPoint)
+      ) {
         interruptRef.current = null;
         setFollow(true);
       }

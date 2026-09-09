@@ -4,7 +4,7 @@
  *   Zod-схемы для валидации ответов orders API.
  * @dependencies: zod
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-03-12 18:00:00
+ * @updated: 2026-09-09 (1.5.51 — комментарии к точкам в списке)
  */
 
 import { z } from 'zod';
@@ -88,6 +88,12 @@ export const availableOrderSchema = z.object({
   dropoffAddress: z.string().nullable(),
   dropoffLat: z.number().nullable(),
   dropoffLng: z.number().nullable(),
+  /**
+   * Комментарии к точкам — сервер v1.100.7. : сборка живёт
+   * дольше сервера, и на старом их просто нет.
+   */
+  pickupNote: z.string().nullable().optional(),
+  dropoffNote: z.string().nullable().optional(),
   estimatedPrice: z.number().nullable(),
   estimatedKm: z.number().nullable(),
   paymentMethod: paymentMethodSchema,

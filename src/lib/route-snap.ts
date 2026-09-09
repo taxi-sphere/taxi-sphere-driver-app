@@ -27,6 +27,7 @@
  *
  * @dependencies: @/lib/heading
  * @created: 2026-09-07 (1.5.39)
+ * @updated: 2026-09-09 (1.5.51 — линия маршрута не исчезает на последнем узле)
  */
 
 import { bearingDegrees, type HeadingPoint } from '@/lib/heading';
@@ -178,5 +179,21 @@ export function snapToRoute(
  */
 export function routeAhead(route: HeadingPoint[], snap: RouteSnap | null): HeadingPoint[] {
   if (!snap || route.length < 2) return route;
-  return [snap.point, ...route.slice(snap.index + 1)];
+
+  const ahead = [snap.point, ...route.slice(snap.index + 1)];
+
+  /**
+   * ЛИНИЯ НЕ ИСЧЕЗАЕТ, ПОКА МАРШРУТ ЕСТЬ.
+   *
+   * Когда проекция попала на последний узел, впереди не остаётся ни одной
+   * точки, и хвост вырождается в одну — карта такую не рисует (`Polyline`
+   * нужно минимум две), маршрут пропадает с экрана целиком. Снаружи это
+   * читается как «маршрут сбросился», хотя он есть и построен: ровно так
+   * это и выглядело у владельца 09.09.2026.
+   *
+   * Показать целую линию, включая пройденный кусок, — меньшее зло, чем не
+   * показать никакой: водитель видит, куда ехать, а лишний хвост позади
+   * исчезнет на следующем же обновлении маршрута.
+   */
+  return ahead.length >= 2 ? ahead : route;
 }

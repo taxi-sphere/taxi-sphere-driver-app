@@ -24,7 +24,7 @@
  *   - @/stores/connection.store
  *   - @/lib/theme, @/components/ui
  * @created: 2026-03-18 07:00:00
- * @updated: 2026-09-02 (v1.5.23 — на заказе пилюля переключает встречные)
+ * @updated: 2026-09-09 (1.5.51 — плашка учитывает отметку «не предлагайте заказы»)
  */
 
 import { useEffect } from 'react';
@@ -114,7 +114,7 @@ const ON_ORDER_VIEW: Record<'accepting' | 'refusing', StatusView> = {
 
 export function TopBar({ onMenuPress }: TopBarProps) {
   const router = useRouter();
-  const { status, toggleBusy, isUpdating } = useDriverStatus();
+  const { status, setStatusTo, isUpdating } = useDriverStatus();
   // На заказе та же пилюля переключает готовность взять встречный (1.5.23).
   const accepting = useAcceptingOrders();
   const { isTracking } = useLocationTracking();
@@ -129,13 +129,43 @@ export function TopBar({ onMenuPress }: TopBarProps) {
   const styles = useThemedStyles(createStyles);
 
   const onOrder = status === 'on_order';
+
+  /**
+   * ВНЕ ЗАКАЗА ПИЛЮЛЯ ТОЖЕ СМОТРИТ НА `acceptingOrders` (1.5.51).
+   *
+   * У водителя ДВА независимых признака: `status` — состояние смены, и
+   * `acceptingOrders` — «предлагайте / не предлагайте». Второй можно было
+   * выключить только на заказе, а выключенным он оставался и после
+   * высадки. Итог на скриншоте владельца: шапка пишет «СВОБОДЕН», а список
+   * заказов под ней — «Вы отметили себя занятым, новые заказы не
+   * предлагаются». Оба верны, и оба про одно и то же — брать ли работу.
+   *
+   * Экран не имеет права говорить «свободен», когда сервер водителю
+   * заказов не шлёт. Поэтому «занят» показывается, если верно ЛЮБОЕ из
+   * двух, а снятие ставит оба признака в согласованное состояние — иначе
+   * нажатие «освободиться» лечило бы только половину.
+   */
+  const refusing = !accepting.accepting;
+  const effectiveStatus: DriverStatus =
+    !onOrder && status === 'online' && refusing ? 'busy' : status;
+
   const view = onOrder
     ? ON_ORDER_VIEW[accepting.accepting ? 'accepting' : 'refusing']
-    : (STATUS_VIEW[status] ?? STATUS_VIEW.offline);
+    : (STATUS_VIEW[effectiveStatus] ?? STATUS_VIEW.offline);
 
-  // На заказе жмём готовность взять встречный, вне заказа — статус смены.
-  const toggle = onOrder ? accepting.toggle : toggleBusy;
-  const isBusy = onOrder ? accepting.isPending : isUpdating;
+  // На заказе жмём готовность взять встречный, вне заказа — статус смены
+  // И отметку «не предлагайте» вместе с ним: решение одно, признака два.
+  const toggle = onOrder
+    ? accepting.toggle
+    : () => {
+        const goingFree = effectiveStatus !== 'online';
+        if (accepting.accepting !== goingFree) accepting.toggle();
+        const target: DriverStatus = goingFree ? 'online' : 'busy';
+        if (status !== target) setStatusTo(target);
+      };
+  const isBusy = onOrder
+    ? accepting.isPending
+    : isUpdating || accepting.isPending;
   const canToggle = isConnected && view.togglable && !isBusy;
 
   const scale = useSharedValue(1);

@@ -38,6 +38,8 @@
  *   - @/types/order
  *   - @/lib/utils (splitAddressEntrance, stripSharedCityPrefix,
  *     pickupEtaStep, pickupEtaPresets)
+ *   - react-native-safe-area-context (отступ под системной панелью)
+ * @updated: 2026-09-09 (1.5.51 — отступ под системную панель, крупнее кнопки времени)
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -54,6 +56,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AvailableOrder } from '@/types/order';
 import {
   pickupEtaPresets,
@@ -65,6 +68,7 @@ import {
   radius,
   spacing,
   text,
+  touch,
   useTheme,
   useThemedStyles,
   type Theme,
@@ -336,6 +340,7 @@ export function IncomingOrderModal({
 }: IncomingOrderModalProps) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const insets = useSafeAreaInsets();
   const [etaMin, setEtaMin] = useState<number>(initialEtaMin ?? 5);
   const [remaining, setRemaining] = useState<number>(timerSec);
   const pulse = useRef(new Animated.Value(0)).current;
@@ -461,7 +466,12 @@ export function IncomingOrderModal({
       statusBarTranslucent
       onRequestClose={onDismiss}
     >
-      <View style={styles.backdrop}>
+      {/* Отступ снизу — по реальной высоте системной панели.
+          Без него кнопки Android («назад», «домой», «обзор») ложились
+          поверх «Принять»: у модалки был фиксированный отступ 16 px, а
+          панель на телефоне владельца выше вдвое. На жестовой навигации
+          вставка почти нулевая, так что лишнего места не появится. */}
+      <View style={[styles.backdrop, { paddingBottom: spacing.lg + insets.bottom }]}>
         <View style={styles.card}>
           {/* Шапка */}
           <View style={styles.header}>
@@ -876,15 +886,26 @@ const createEtaStyles = (t: Theme) =>
     },
     valueUnit: { color: t.colors.textMuted, ...text.label, fontWeight: '600' },
     presets: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm },
+    /*
+     * РАЗМЕР ПАЛЬЦА, А НЕ РАЗМЕР ЦИФРЫ (1.5.51).
+     *
+     * Было: отступы 12/8 вокруг текста в 14 pt — кнопка выходила около
+     * 36 pt в высоту и 34 в ширину, при рекомендованном минимуме 44 и
+     * при том, что водитель жмёт её на ходу, одной рукой, за 20 секунд
+     * до автоотказа. Промах здесь стоит заказа.
+     */
     preset: {
+      minWidth: touch.min,
+      height: touch.min,
       paddingHorizontal: spacing.md,
-      paddingVertical: spacing.sm,
-      borderRadius: radius.sm,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderRadius: radius.md,
       backgroundColor: t.colors.surface,
       borderWidth: 1,
       borderColor: t.colors.border,
     },
     presetActive: { backgroundColor: t.colors.primary, borderColor: t.colors.primary },
-    presetText: { color: t.colors.textSecondary, ...text.label, fontWeight: '700' },
+    presetText: { color: t.colors.textSecondary, ...text.bodyStrong },
     presetTextActive: { color: t.colors.textInverse },
   });

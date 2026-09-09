@@ -12,6 +12,7 @@
  *
  * @dependencies: vitest, @/lib/route-snap
  * @created: 2026-09-07 (1.5.39)
+ * @updated: 2026-09-09 (1.5.51 — линия не исчезает на последнем узле)
  */
 
 import { describe, it, expect } from 'vitest';
@@ -123,5 +124,16 @@ describe('routeAhead', () => {
 
   it('без проекции маршрут отдаётся целиком', () => {
     expect(routeAhead(STRAIGHT, null)).toBe(STRAIGHT);
+  });
+
+  it('ЛИНИЯ НЕ ПРОПАДАЕТ, когда впереди не осталось ни одной точки', () => {
+    // Проекция на самый последний узел: хвост вырождается в одну точку, а
+    // карта такую не рисует — маршрут исчезал с экрана целиком, и снаружи
+    // это читалось как «маршрут сбросился» (жалоба владельца 09.09.2026).
+    const atEnd = { point: STRAIGHT[3]!, index: 3, bearing: 0, distanceM: 0 };
+    const ahead = routeAhead(STRAIGHT, atEnd);
+
+    expect(ahead.length).toBeGreaterThanOrEqual(2);
+    expect(ahead).toBe(STRAIGHT);
   });
 });

@@ -21,6 +21,7 @@
  *
  * @dependencies: нет (намеренно — модуль должен грузиться в тестах без RN)
  * @created: 2026-09-01 (v1.5.17)
+ * @updated: 2026-09-09 (1.5.51 — шкала шрифтов поднята на пункт)
  */
 
 import type { TextStyle } from 'react-native';
@@ -28,10 +29,20 @@ import type { TextStyle } from 'react-native';
 /**
  * Типографика.
  *
- * Шкала СОЗНАТЕЛЬНО КРУПНЕЕ прежней. Было: подписи вкладок 10px, бейджи
- * 10px, индикаторы GPS 11px, строка баланса 12px. Приложением пользуются
- * за рулём, урывками, часто на солнце — 10px там нечитаемы. Нижняя граница
- * шкалы теперь 12px, и она только для служебных подписей.
+ * Шкала СОЗНАТЕЛЬНО КРУПНЕЕ обычной мобильной. Было (до v1.5.17): подписи
+ * вкладок 10px, бейджи 10px, индикаторы GPS 11px, строка баланса 12px.
+ * Приложением пользуются за рулём, урывками, часто на солнце — 10px там
+ * нечитаемы.
+ *
+ * В 1.5.51 шкала поднята ЕЩЁ НА ПУНКТ по просьбе владельца («сильно мелко,
+ * водители могут не увидеть»). Причина не в цифрах, а в условиях чтения:
+ * телефон в держателе на расстоянии вытянутой руки, взгляд — на полсекунды.
+ * Прежняя шкала была рассчитана на обычное приложение (body 16), и в машине
+ * нижние ступени читались с усилием. Нижняя граница теперь 13px, и она
+ * только для служебных подписей.
+ *
+ * Крупные величины — `display` и `title` — не трогали: суммы и главный адрес
+ * и так видно, а рост сверху сжал бы всё остальное.
  *
  * `lineHeight` задан явно у каждого пресета: в React Native автоматический
  * интерлиньяж различается между Android и iOS, и без явного значения
@@ -43,20 +54,20 @@ export const text = {
   /** Главный адрес на экране заказа. */
   title: { fontSize: 24, lineHeight: 30, fontWeight: '700' },
   /** Заголовок экрана или карточки. */
-  heading: { fontSize: 19, lineHeight: 25, fontWeight: '600' },
-  subheading: { fontSize: 17, lineHeight: 23, fontWeight: '600' },
+  heading: { fontSize: 20, lineHeight: 26, fontWeight: '600' },
+  subheading: { fontSize: 18, lineHeight: 24, fontWeight: '600' },
   /** Основной текст. */
-  body: { fontSize: 16, lineHeight: 22, fontWeight: '400' },
-  bodyStrong: { fontSize: 16, lineHeight: 22, fontWeight: '600' },
+  body: { fontSize: 17, lineHeight: 23, fontWeight: '400' },
+  bodyStrong: { fontSize: 17, lineHeight: 23, fontWeight: '600' },
   /** Подписи, метаданные, значения в строках «ключ — значение». */
-  label: { fontSize: 14, lineHeight: 19, fontWeight: '500' },
-  labelStrong: { fontSize: 14, lineHeight: 19, fontWeight: '700' },
+  label: { fontSize: 15, lineHeight: 20, fontWeight: '500' },
+  labelStrong: { fontSize: 15, lineHeight: 20, fontWeight: '700' },
   /** Минимально допустимый размер. Только служебное. */
-  caption: { fontSize: 12, lineHeight: 16, fontWeight: '500' },
+  caption: { fontSize: 13, lineHeight: 17, fontWeight: '500' },
   /** Надзаголовок секции: «ПОДАЧА», «КУДА». */
   overline: {
-    fontSize: 12,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 17,
     fontWeight: '700',
     letterSpacing: 0.8,
     textTransform: 'uppercase',

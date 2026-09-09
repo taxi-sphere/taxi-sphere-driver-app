@@ -5,7 +5,7 @@
  *   Контракты совпадают с /api/v1/driver/orders/* на backend.
  * @dependencies: нет
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-02 (v1.5.23 — детали заказа, телефон диспетчерской)
+ * @updated: 2026-09-09 (1.5.51 — комментарии к точкам в списке)
  */
 
 /** Статус заказа */
@@ -95,6 +95,9 @@ export interface AvailableOrder {
   dropoffAddress: string | null;
   dropoffLat: number | null;
   dropoffLng: number | null;
+  /** Комментарии диспетчера к точкам (сервер v1.100.7). */
+  pickupNote?: string | null;
+  dropoffNote?: string | null;
   estimatedPrice: number | null;
   estimatedKm: number | null;
   paymentMethod: PaymentMethod | null;

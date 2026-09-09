@@ -12,7 +12,7 @@
  * @dependencies: react-query, @/api/routing.api, @/lib/order-route-key,
  *   @/lib/route-choice
  * @created: 2026-09-04 (1.5.36)
- * @updated: 2026-09-09 (1.5.49 — выбор варианта пути, MOB-024)
+ * @updated: 2026-09-09 (1.5.51 — выбор варианта пути перестраивает линию сразу)
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -117,19 +117,44 @@ export function useOrderRoute({
    * сильнее всего отличается от быстрого. Почему не индекс и не километраж
    * — разобрано в `@/lib/route-choice`.
    */
+  const refetch = query.refetch;
+
   const choose = useCallback(
     (index: number) => {
       const variants = route?.routes ?? [];
-      if (index <= 0) {
-        setAnchor(null);
-        return;
-      }
-      const selected = variants[index];
-      const reference = variants[0];
-      if (!selected || !reference) return;
-      setAnchor(pickAnchor(selected.coordinates, reference.coordinates));
+
+      const next =
+        index <= 0
+          ? null
+          : (() => {
+              const selected = variants[index];
+              const reference = variants[0];
+              if (!selected || !reference) return undefined;
+              return pickAnchor(selected.coordinates, reference.coordinates);
+            })();
+
+      // `undefined` — вариант не найден, ничего не меняем.
+      if (next === undefined) return;
+
+      /**
+       * СНАЧАЛА ССЫЛКА, ПОТОМ ЗАПРОС, и это не перестраховка.
+       *
+       * Опорная точка намеренно НЕ входит в ключ запроса (см. выше), поэтому
+       * `setAnchor` сам по себе перерисовывает панель, но НЕ перестраивает
+       * линию: ключ не изменился, react-query ничего не перезапрашивает.
+       * Водитель жал на вариант — и на карте не менялось ничего, пока он не
+       * проедет 60-110 метров и ключ не сдвинется сам. Ровно на это и
+       * пожаловался владелец 09.09.2026.
+       *
+       * `refetch` перезапускает `queryFn` с тем же ключом, а тот читает
+       * `anchorRef` — значит ссылку надо обновить ДО вызова, не дожидаясь
+       * рендера, иначе запрос уйдёт со старой точкой.
+       */
+      anchorRef.current = next;
+      setAnchor(next);
+      void refetch();
     },
-    [route],
+    [route, refetch],
   );
 
   return { route, chosen: anchor != null, choose };

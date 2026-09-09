@@ -5,7 +5,7 @@
  *   Персистенция через AsyncStorage.
  * @dependencies: zustand, @react-native-async-storage/async-storage
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-08 (1.5.42 — ориентация карты)
+ * @updated: 2026-09-09 (1.5.51 — настройка «Карта едет за машиной»)
  */
 
 import { create } from 'zustand';
@@ -42,6 +42,19 @@ interface SettingsState {
    */
   keepScreenOn: boolean;
   /**
+   * 1.5.51: ехать ли карте за машиной сама, без просьбы.
+   *
+   * По умолчанию ВКЛЮЧЕНО — так вело себя приложение с 1.5.45, и для
+   * поездки это верно: водителю нужна дорога впереди, а не общий план.
+   *
+   * Выключатель нужен тем, кто держит телефон как обзорную карту и ведёт
+   * машину по своей памяти: у них слежение отбирает карту каждый раз,
+   * когда они её отодвинули. При выключенной настройке карта стоит там,
+   * куда её поставили, а кнопка с прицелом включает слежение вручную —
+   * то есть становится не «вернуть», а «вести».
+   */
+  autoFollowMap: boolean;
+  /**
    * 1.5.42: как повёрнута карта заказа.
    *
    * `course` — по курсу, как в навигаторе: дорога впереди всегда вверху,
@@ -63,6 +76,7 @@ interface SettingsState {
   setLastPhone: (phone: string) => void;
   setBetaChannel: (enabled: boolean) => void;
   setKeepScreenOn: (enabled: boolean) => void;
+  setAutoFollowMap: (enabled: boolean) => void;
   setMapOrientation: (orientation: MapOrientation) => void;
 }
 
@@ -78,6 +92,7 @@ export const useSettingsStore = create<SettingsState>()(
       lastPhone: '',
       betaChannel: false,
       keepScreenOn: true,
+      autoFollowMap: true,
       mapOrientation: 'course',
 
       setServerUrl: (serverUrl) => set({ serverUrl }),
@@ -90,6 +105,7 @@ export const useSettingsStore = create<SettingsState>()(
       setLastPhone: (lastPhone) => set({ lastPhone }),
       setBetaChannel: (betaChannel) => set({ betaChannel }),
       setKeepScreenOn: (keepScreenOn) => set({ keepScreenOn }),
+      setAutoFollowMap: (autoFollowMap) => set({ autoFollowMap }),
       setMapOrientation: (mapOrientation) => set({ mapOrientation }),
     }),
     {

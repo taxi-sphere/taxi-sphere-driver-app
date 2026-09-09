@@ -20,6 +20,7 @@
  *
  * @dependencies: @/components/ui, @/lib/theme, @/lib/utils
  * @created: 2026-09-01 (v1.5.17)
+ * @updated: 2026-09-09 (1.5.51 — комментарии к адресам и к заказу)
  */
 
 import { memo } from 'react';
@@ -69,10 +70,30 @@ export const OrderCard = memo(function OrderCard({
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
 
+  /**
+   * КОММЕНТАРИИ К ТОЧКАМ — В СПИСКЕ, А НЕ ТОЛЬКО ПОСЛЕ ПРИНЯТИЯ (1.5.51).
+   *
+   * «Ждать у шлагбаума, пропуск на посту» меняет и решение брать заказ, и
+   * время подачи. Узнавать это, уже подъехав, поздно; до 1.5.51 примечание
+   * приходило только у промежуточных точек, да и то карточка его не
+   * рисовала.
+   */
   const points: RoutePoint[] = [
-    { kind: 'pickup', address: order.pickupAddress },
-    ...(order.stops ?? []).map((stop) => ({ kind: 'stop' as const, address: stop.address })),
-    ...(order.dropoffAddress ? [{ kind: 'dropoff' as const, address: order.dropoffAddress }] : []),
+    { kind: 'pickup', address: order.pickupAddress, note: order.pickupNote },
+    ...(order.stops ?? []).map((stop) => ({
+      kind: 'stop' as const,
+      address: stop.address,
+      note: stop.note,
+    })),
+    ...(order.dropoffAddress
+      ? [
+          {
+            kind: 'dropoff' as const,
+            address: order.dropoffAddress,
+            note: order.dropoffNote,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -116,6 +137,23 @@ export const OrderCard = memo(function OrderCard({
         ) : null}
 
         <RoutePoints points={points} compact style={styles.route} />
+
+        {/* Комментарий диспетчера ко ВСЕМУ заказу — то, что не относится
+            к конкретной точке: «позвонить за 5 минут», «два пассажира с
+            собакой». Приходил в списке с самого начала и не рисовался
+            нигде. Со значком, чтобы не спутать с примечанием к адресу. */}
+        {order.comment ? (
+          <View style={styles.comment}>
+            <Ionicons
+              name="chatbubble-ellipses-outline"
+              size={iconTokens.xs}
+              color={colors.textMuted}
+            />
+            <AppText variant="label" tone="secondary" style={styles.commentText}>
+              {order.comment}
+            </AppText>
+          </View>
+        ) : null}
 
         <Divider style={styles.divider} />
 
@@ -181,6 +219,8 @@ const createStyles = (_t: Theme) =>
     timeBadge: { marginTop: 2 },
     city: { marginTop: spacing.sm },
     route: { marginTop: spacing.xs },
+    comment: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.xs, marginTop: spacing.xs },
+    commentText: { flex: 1 },
     divider: { marginTop: spacing.xs },
     footer: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, flexWrap: 'wrap' },
     metric: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
