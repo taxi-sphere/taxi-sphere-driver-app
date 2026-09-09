@@ -75,7 +75,16 @@ function readFromEnvLocal(name) {
 }
 
 function resolveGoogleMapsKey() {
-  const fromProcess = process.env[ENV_VAR];
+  /**
+   * Обращение по ИМЕНИ, а не через переменную с именем.
+   *
+   * Правило `expo/no-dynamic-env-var` не придирка: сборщик подставляет
+   * значения переменных окружения статически, по текстовому совпадению
+   * `process.env.ИМЯ`. Динамический доступ он не видит и подставить не
+   * может — на сборке ключ молча оказался бы пустым, а карта у водителя
+   * серой.
+   */
+  const fromProcess = process.env.GOOGLE_MAPS_ANDROID_API_KEY;
   if (typeof fromProcess === 'string' && fromProcess.trim()) {
     return fromProcess.trim();
   }

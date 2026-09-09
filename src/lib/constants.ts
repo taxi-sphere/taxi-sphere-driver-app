@@ -93,7 +93,14 @@ export const DEFAULT_SOCKET_URL =
  */
 export function getApiUrl(): string {
   try {
-    // Ленивый импорт чтобы избежать циклических зависимостей
+    /**
+     * Ленивый импорт РАЗРЫВАЕТ ЦИКЛ: хранилище настроек само тянет этот
+     * модуль за адресом сервера по умолчанию. Статический импорт здесь
+     * означал бы обращение к ещё не созданному хранилищу при загрузке —
+     * не всегда, а в зависимости от порядка модулей, что хуже честного
+     * падения.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { useSettingsStore } = require('@/stores/settings.store');
     const serverUrl = useSettingsStore.getState().serverUrl;
     if (serverUrl) return serverUrl.replace(/\/$/, '');

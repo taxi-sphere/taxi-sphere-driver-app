@@ -1395,33 +1395,46 @@ export default function CurrentOrderScreen() {
                   </Button>
                 </View>
 
-                {/* Пока сервер не завёл счётчик (заказ ещё не в подаче)
-                    выключать нечего — кнопки нет. */}
-                {meter && (
+                {/**
+                 * Кнопка живёт и НА ПОДАЧЕ (исправлено в 1.5.50).
+                 *
+                 * Раньше она бралась от `meter`, а тот заводится только в
+                 * поездке — и на подаче водитель не мог остановить счётчик,
+                 * который включился САМ. Случай обычный: приехал раньше
+                 * срока и готов подождать бесплатно, или клиент уже вышел, а
+                 * посадка задерживается не по его вине. Сервер переключение
+                 * на подаче принимал всегда (`/waiting` знает оба статуса) —
+                 * не показывалась только кнопка.
+                 *
+                 * Берём `headerMeter`: он есть с момента «я на месте».
+                 */}
+                {headerMeter && (
                   <Pressable
                     onPress={handleToggleWaiting}
                     disabled={switchingWaiting}
                     accessibilityRole="button"
                     accessibilityLabel={
-                      meter.waitingOn
+                      headerMeter.waitingOn
                         ? 'Закончить ожидание'
                         : 'Начать платное ожидание'
                     }
                     style={({ pressed }) => [
                       styles.waitingSquare,
                       {
-                        backgroundColor: meter.waitingOn
+                        backgroundColor: headerMeter.waitingOn
                           ? colors.danger
                           : colors.surfaceSunken,
-                        borderColor: meter.waitingOn ? colors.danger : colors.border,
+                        borderColor: headerMeter.waitingOn ? colors.danger : colors.border,
                         opacity: pressed || switchingWaiting ? 0.7 : 1,
                       },
                     ]}
                   >
                     <Ionicons
-                      name={meter.waitingOn ? 'pause' : 'hourglass-outline'}
+                      name={headerMeter.waitingOn ? 'pause' : 'hourglass-outline'}
                       size={24}
-                      color={meter.waitingOn ? colors.textInverse : colors.textSecondary}
+                      color={
+                        headerMeter.waitingOn ? colors.textInverse : colors.textSecondary
+                      }
                     />
                   </Pressable>
                 )}

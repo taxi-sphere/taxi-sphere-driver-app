@@ -4,6 +4,13 @@
  *   Регистрация push-уведомлений через Expo Notifications.
  *   Настройка каналов, получение push-токена.
  *   В Expo Go push-уведомления недоступны (SDK 53+), функции gracefully деградируют.
+ *
+ *   ПОЧЕМУ ЗДЕСЬ `require`, А НЕ `import`. Модуль подгружается ЛЕНИВО и
+ *   только вне Expo Go: статический импорт исполняется при загрузке файла,
+ *   то есть и в Expo Go тоже — а там нативной части нет, и приложение
+ *   падает до первой строки полезного кода. Проверка `isExpoGo` спасает
+ *   только потому, что стоит ПЕРЕД require. Правило линтера про
+ *   `require()` здесь подавлено осознанно, а не по невнимательности.
  * @dependencies: expo-notifications, expo-constants
  * @created: 2026-03-12 18:00:00
  * @updated: 2026-03-13 12:00:00
@@ -22,6 +29,8 @@ export function configureNotifications(): void {
   }
 
   try {
+    // Ленивый импорт — см. шапку файла: в Expo Go модуля нет.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Notifications = require('expo-notifications');
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
@@ -45,6 +54,8 @@ export async function registerForPushNotifications(): Promise<string | null> {
   }
 
   try {
+    // Ленивый импорт — см. шапку файла: в Expo Go модуля нет.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Notifications = require('expo-notifications');
 
     // Настройка Android-канала
@@ -100,6 +111,8 @@ export async function showLocalNotification(
   if (isExpoGo) return;
 
   try {
+    // Ленивый импорт — см. шапку файла: в Expo Go модуля нет.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Notifications = require('expo-notifications');
     await Notifications.scheduleNotificationAsync({
       content: {
