@@ -29,6 +29,7 @@ import {
   pickupEtaStep,
   formatScheduledAt,
   pickupEtaPresets,
+  balancedRows,
 } from './utils';
 
 /** Ввод по одному символу через собственный вывод маски — как в поле. */
@@ -372,5 +373,36 @@ describe('apiErrorForStatus — причина вместо адреса', () =>
       expect(text).not.toMatch(/https?:\/\//);
       expect(text).not.toMatch(/\d{3}/);
     }
+  });
+});
+
+describe('balancedRows — ряды кнопок одинаковой длины', () => {
+  it('пять раскладываются как три и два, а не четыре и один', () => {
+    expect(balancedRows([1, 2, 3, 4, 5])).toEqual([[1, 2, 3], [4, 5]]);
+  });
+
+  it('четыре — поровну', () => {
+    expect(balancedRows([1, 2, 3, 4])).toEqual([[1, 2], [3, 4]]);
+  });
+
+  it('шесть — по три', () => {
+    expect(balancedRows([1, 2, 3, 4, 5, 6])).toEqual([[1, 2, 3], [4, 5, 6]]);
+  });
+
+  it('три и меньше — один ряд', () => {
+    expect(balancedRows([1, 2, 3])).toEqual([[1, 2, 3]]);
+    expect(balancedRows([1])).toEqual([[1]]);
+  });
+
+  it('пусто — ни одного ряда', () => {
+    expect(balancedRows([])).toEqual([]);
+  });
+
+  it('восемь при трёх в ряду — три, три, два', () => {
+    expect(balancedRows([1, 2, 3, 4, 5, 6, 7, 8])).toEqual([[1, 2, 3], [4, 5, 6], [7, 8]]);
+  });
+
+  it('порядок не меняется', () => {
+    expect(balancedRows([3, 5, 7, 10, 15]).flat()).toEqual([3, 5, 7, 10, 15]);
   });
 });

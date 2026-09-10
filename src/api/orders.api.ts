@@ -19,7 +19,7 @@ import { driverLogger } from '@/services/logger.service';
 import { humanApiError } from '@/lib/utils';
 import type {
   AvailableOrder,
-  AvailableOrdersMeta,
+  AvailableOrdersResponse,
   CurrentOrder,
   OrderDetails,
   AcceptOrderResponse,
@@ -30,7 +30,7 @@ import type {
 export async function getAvailableOrders(params?: {
   radiusKm?: number;
   limit?: number;
-}): Promise<{ items: AvailableOrder[]; meta?: AvailableOrdersMeta }> {
+}): Promise<AvailableOrdersResponse> {
   const searchParams: Record<string, string> = {};
   if (params?.radiusKm) searchParams.radiusKm = String(params.radiusKm);
   if (params?.limit) searchParams.limit = String(params.limit);

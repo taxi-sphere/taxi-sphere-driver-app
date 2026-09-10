@@ -60,6 +60,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AvailableOrder } from '@/types/order';
 import {
   pickupEtaPresets,
+  balancedRows,
   pickupEtaStep,
   stripSharedCityPrefix,
 } from '@/lib/utils';
@@ -99,6 +100,16 @@ export interface IncomingOrderModalProps {
   onAccept: (pickupEtaMin: number) => void;
   onDismiss: () => void;
 }
+
+/**
+ * Сколько кнопок времени подачи влезает в ряд.
+ *
+ * Три, потому что кнопка выросла до 64 pt (1.5.54) и на 360-точечном
+ * экране четыре уже жмутся. Не «сколько поместится», а фиксированное
+ * число: ряды должны быть одинаковыми на любом телефоне, иначе один и
+ * тот же экран у двух водителей выглядит по-разному.
+ */
+const PRESETS_PER_ROW = 3;
 
 const MIN_ETA = 1;
 const MAX_ETA = 1440;
@@ -298,25 +309,29 @@ function EtaSelector({
         </TouchableOpacity>
       </View>
 
-      <View style={etaStyles.presets}>
-        {presets.map((p) => (
-          <TouchableOpacity
-            key={p}
-            accessibilityRole="button"
-            accessibilityLabel={`Установить ${p} минут`}
-            onPress={() => onChange(p)}
-            disabled={disabled}
-            style={[etaStyles.preset, value === p && etaStyles.presetActive]}
-          >
-            <Text
-              style={[
-                etaStyles.presetText,
-                value === p && etaStyles.presetTextActive,
-              ]}
-            >
-              {p}
-            </Text>
-          </TouchableOpacity>
+      <View style={etaStyles.presetRows}>
+        {balancedRows(presets, PRESETS_PER_ROW).map((row, rowIndex) => (
+          <View key={rowIndex} style={etaStyles.presets}>
+            {row.map((p) => (
+              <TouchableOpacity
+                key={p}
+                accessibilityRole="button"
+                accessibilityLabel={`Установить ${p} минут`}
+                onPress={() => onChange(p)}
+                disabled={disabled}
+                style={[etaStyles.preset, value === p && etaStyles.presetActive]}
+              >
+                <Text
+                  style={[
+                    etaStyles.presetText,
+                    value === p && etaStyles.presetTextActive,
+                  ]}
+                >
+                  {p}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         ))}
       </View>
     </View>
@@ -897,27 +912,46 @@ const createEtaStyles = (t: Theme) =>
       borderBottomColor: t.colors.primary,
     },
     valueUnit: { color: t.colors.textMuted, ...text.label, fontWeight: '600' },
-    presets: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm },
     /*
-     * РАЗМЕР ПАЛЬЦА, А НЕ РАЗМЕР ЦИФРЫ (1.5.51).
+     * РЯДЫ РАВНОЙ ДЛИНЫ, А НЕ ОБЫЧНЫЙ ПЕРЕНОС (1.5.54).
      *
-     * Было: отступы 12/8 вокруг текста в 14 pt — кнопка выходила около
-     * 36 pt в высоту и 34 в ширину, при рекомендованном минимуме 44 и
-     * при том, что водитель жмёт её на ходу, одной рукой, за 20 секунд
-     * до автоотказа. Промах здесь стоит заказа.
+     * Кнопки стали крупнее, и пять штук в ряд на узком экране уже не
+     * помещаются. Обычный `flexWrap` уложил бы их как «четыре и одна»:
+     * одинокая кнопка внизу читается как особенная, хотя она такая же.
+     * Ряды считает `balancedRows` — пять становятся «три и два».
+     */
+    presetRows: { gap: spacing.sm },
+    presets: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      gap: spacing.sm,
+    },
+    /*
+     * РАЗМЕР ПАЛЬЦА, А НЕ РАЗМЕР ЦИФРЫ (1.5.51, увеличено в 1.5.54).
+     *
+     * Было в самом начале: отступы 12/8 вокруг текста в 14 pt — кнопка
+     * выходила около 36 pt в высоту и 34 в ширину, при рекомендованном
+     * минимуме 44 и при том, что водитель жмёт её на ходу, одной рукой,
+     * за 20 секунд до автоотказа. Промах здесь стоит заказа.
+     *
+     * 1.5.54: с `touch.min` (48) до `touch.large` (64) и цифра крупнее.
+     * Минимум — это порог «попасть можно», а не «удобно на ходу»: сюда
+     * целятся, не глядя, в трясущейся машине, и запас важнее плотности.
      */
     preset: {
-      minWidth: touch.min,
-      height: touch.min,
+      minWidth: touch.large,
+      height: touch.large,
+      flex: 1,
+      maxWidth: 110,
       paddingHorizontal: spacing.md,
       justifyContent: 'center',
       alignItems: 'center',
-      borderRadius: radius.md,
+      borderRadius: radius.lg,
       backgroundColor: t.colors.surface,
       borderWidth: 1,
       borderColor: t.colors.border,
     },
     presetActive: { backgroundColor: t.colors.primary, borderColor: t.colors.primary },
-    presetText: { color: t.colors.textSecondary, ...text.bodyStrong },
+    presetText: { color: t.colors.textSecondary, ...text.title },
     presetTextActive: { color: t.colors.textInverse },
   });

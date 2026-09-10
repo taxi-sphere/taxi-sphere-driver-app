@@ -294,6 +294,30 @@ export function pickupEtaPresets(recommended: number): number[] {
   return [30, 45, 60, 90, 120];
 }
 
+/**
+ * Разложить кнопки по РАВНЫМ рядам, не больше `maxPerRow` в каждом.
+ *
+ * ЗАЧЕМ НЕ ОБЫЧНЫЙ `flexWrap` (1.5.54). Перенос по мере заполнения даёт
+ * ряды разной длины: пять кнопок укладываются как «четыре и одна», и
+ * одинокая кнопка внизу читается как отдельная, особенная — хотя она
+ * такая же, как остальные. Ряды считаем сами: пять становятся «три и
+ * два», четыре — «два и два», шесть — «три и три».
+ *
+ * @param items что раскладываем
+ * @param maxPerRow сколько влезает в ряд при выбранном размере кнопки
+ */
+export function balancedRows<T>(items: T[], maxPerRow = 3): T[][] {
+  if (items.length === 0) return [];
+  const rowCount = Math.ceil(items.length / maxPerRow);
+  const perRow = Math.ceil(items.length / rowCount);
+
+  const rows: T[][] = [];
+  for (let i = 0; i < items.length; i += perRow) {
+    rows.push(items.slice(i, i + perRow));
+  }
+  return rows;
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Адрес: сокращения типов улиц                                               */
 /* -------------------------------------------------------------------------- */

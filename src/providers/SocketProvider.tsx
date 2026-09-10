@@ -7,7 +7,7 @@
  *   Инвалидирует React Query при получении событий.
  * @dependencies: socket.service, auth.store, token.service, @tanstack/react-query
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-10 (1.5.53 — звук на отмену заказа и сообщение диспетчера)
+ * @updated: 2026-09-10 (1.5.54 — сигнал о заказе, попавшем в список свободных)
  */
 
 import { useEffect, useRef } from 'react';
@@ -20,6 +20,7 @@ import { showLocalNotification } from '@/services/notification.service';
 import { playSound } from '@/services/sound.service';
 import * as tokenService from '@/services/token.service';
 import { getApiBase, API_TIMEOUT_MS, fetchServerConfig } from '@/lib/constants';
+import type { AvailableOrdersResponse } from '@/types/order';
 
 /** Попытка refresh токена, возвращает новый accessToken или null */
 async function tryRefreshToken(): Promise<string | null> {
@@ -125,19 +126,50 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     // Подписка на события для инвалидации React Query + local notifications
     const unsubNew = socketService.onOrderNew((data) => {
-      void queryClient.invalidateQueries({ queryKey: ['orders', 'available'] });
-      // Local notification если приложение в фоне
-      if (AppState.currentState !== 'active') {
-        // v1.5.9: обращаемся к типизированному полю напрямую. Приведение
-        // `data as Record<string, unknown>` TypeScript отвергал (у
-        // OrderNewEvent нет index-signature), и заодно оно скрывало опечатки
-        // в именах полей.
-        void showLocalNotification(
-          'Новый заказ',
-          data?.pickupAddress || 'Доступен новый заказ',
-          { type: 'new_order' },
-        );
-      }
+      void (async () => {
+        /**
+         * Сначала обновляем список, потом решаем, звучать ли (1.5.54).
+         *
+         * Событие `order:new` сервер рассылает ВСЕМ водителям сразу —
+         * «они сами отфильтруют по радиусу и службе». Звук по факту
+         * события звенел бы на заказы, которых водитель даже не увидит:
+         * за радиусом, чужой службы, недоступные из-за встречного.
+         * Поэтому спрашиваем не событие, а список: попал заказ в мою
+         * выдачу — значит есть о чём сигналить. Правило радиуса при этом
+         * остаётся ОДНО и живёт на сервере, где ему и место.
+         */
+        await queryClient.refetchQueries({
+          queryKey: ['orders', 'available'],
+          type: 'all',
+        });
+
+        if (AppState.currentState !== 'active') {
+          // v1.5.9: обращаемся к типизированному полю напрямую. Приведение
+          // `data as Record<string, unknown>` TypeScript отвергал (у
+          // OrderNewEvent нет index-signature), и заодно оно скрывало опечатки
+          // в именах полей.
+          void showLocalNotification(
+            'Новый заказ',
+            data?.pickupAddress || 'Доступен новый заказ',
+            { type: 'new_order' },
+          );
+        }
+
+        const entries = queryClient.getQueriesData<AvailableOrdersResponse>({
+          queryKey: ['orders', 'available'],
+        });
+
+        for (const [, cached] of entries) {
+          const hit = cached?.items?.find((order) => order.id === data?.orderId);
+          if (!hit) continue;
+          // Водителю сейчас нельзя брать заказы (везёт клиента, отметил
+          // себя занятым) — список ему всё равно показывают, но звонить
+          // о том, чего нельзя взять, незачем.
+          if (cached?.meta?.blockedReason) break;
+          void playSound(hit.scheduledAt ? 'order-available-scheduled' : 'order-available');
+          break;
+        }
+      })();
     });
 
     const unsubStatus = socketService.onOrderStatus(() => {

@@ -199,6 +199,17 @@ export interface AvailableOrdersMeta {
   blockedMessage?: string | null;
 }
 
+/**
+ * Ответ списка свободных заказов.
+ *
+ * Отдельным типом — чтобы читать кэш React Query по имени, а не пересказывать
+ * форму ответа в каждом месте, где она нужна (1.5.54).
+ */
+export interface AvailableOrdersResponse {
+  items: AvailableOrder[];
+  meta?: AvailableOrdersMeta;
+}
+
 /** Ответ принятия заказа (POST /driver/orders/{id}/accept) */
 export interface AcceptOrderResponse {
   success: true;

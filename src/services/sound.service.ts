@@ -14,9 +14,14 @@
  *   раздаётся часто и ничего не требует, водитель через день выключает
  *   целиком — вместе с теми тремя, ради которых он и нужен.
  *
- *   ВЫБОР СИГНАЛА — ТОЛЬКО ДЛЯ ЗАКАЗА. Его слушают весь день, и он должен
- *   отличаться от чужих телефонов в потоке. Отмена и сообщение звучат
- *   всегда одинаково: своим тембром, чтобы их не путали с заказом.
+ *   ВЫБОР СИГНАЛА — У ЗАКАЗА И У СПИСКА. Их слушают весь день, и они
+ *   должны отличаться от чужих телефонов в потоке. Отмена и сообщение
+ *   звучат всегда одинаково: своим тембром, чтобы их не путали с заказом.
+ *
+ *   «ПРЕДЛОЖИЛИ ЛИЧНО» И «ПОЯВИЛОСЬ В СПИСКЕ» — РАЗНЫЕ НОВОСТИ (1.5.54).
+ *   Первая требует ответа за двадцать секунд, вторая — взгляда при случае.
+ *   Поэтому у них разные банки сигналов, и выбрать один и тот же тембр
+ *   обоим нельзя: иначе водитель дёргался бы на каждый чужой заказ.
  *
  *   ГРОМКОСТЬ ВАЖНЕЕ ТЕМБРА. В машине с музыкой и открытым окном решает
  *   именно она, поэтому громкость вынесена в настройки, а мелодий сделано
@@ -47,6 +52,7 @@
  *
  * @dependencies: expo-audio, @/stores/settings.store
  * @created: 2026-09-10 (1.5.53)
+ * @updated: 2026-09-10 (1.5.54 — сигнал о заказе в списке свободных)
  */
 
 import {
@@ -56,13 +62,21 @@ import {
 } from 'expo-audio';
 import {
   useSettingsStore,
+  type ListSoundTone,
   type SoundVariant,
   type SoundVolume,
 } from '@/stores/settings.store';
 import { driverLogger } from '@/services/logger.service';
 
 /** Что именно звучит. */
-export type SoundEvent = 'new-order' | 'order-canceled' | 'chat-message';
+export type SoundEvent =
+  | 'new-order'
+  | 'order-canceled'
+  | 'chat-message'
+  /** В списке свободных появился обычный заказ (1.5.54). */
+  | 'order-available'
+  /** В списке свободных появился предзаказ (1.5.54). */
+  | 'order-available-scheduled';
 
 /**
  * Файлы сигналов.
@@ -77,6 +91,12 @@ const SOURCES = {
   'new-order:insistent': require('../../assets/sounds/new-order-insistent.wav'),
   'order-canceled': require('../../assets/sounds/order-canceled.wav'),
   'chat-message': require('../../assets/sounds/chat-message.wav'),
+  // Общий банк на оба «списочных» события: тембр у каждого свой, но
+  // выбирается из одних и тех же трёх — заводить шесть почти одинаковых
+  // файлов значило бы дать выбор, в котором нечего выбирать.
+  'list:soft': require('../../assets/sounds/list-soft.wav'),
+  'list:double': require('../../assets/sounds/list-double.wav'),
+  'list:bell': require('../../assets/sounds/list-bell.wav'),
 } as const;
 
 type SourceKey = keyof typeof SOURCES;
@@ -113,18 +133,42 @@ async function ensureAudioMode(): Promise<void> {
   audioModeReady = true;
 }
 
-/** Какой файл соответствует событию с учётом выбранного варианта. */
-function sourceKeyFor(event: SoundEvent, variant: SoundVariant): SourceKey {
+/** Какой файл соответствует событию с учётом выбранного тембра. */
+function sourceKeyFor(
+  event: SoundEvent,
+  variant: SoundVariant,
+  tone: ListSoundTone,
+): SourceKey {
   if (event === 'new-order') return `new-order:${variant}` as SourceKey;
-  return event;
+  if (event === 'order-available' || event === 'order-available-scheduled') {
+    return `list:${tone}` as SourceKey;
+  }
+  return event as SourceKey;
+}
+
+/** Тембр, выбранный для «списочного» события. */
+function toneFor(event: SoundEvent): ListSoundTone {
+  const s = useSettingsStore.getState();
+  return event === 'order-available-scheduled'
+    ? s.soundToneAvailableScheduled
+    : s.soundToneAvailable;
 }
 
 /** Включён ли звук для этого события в настройках. */
 function isEnabled(event: SoundEvent): boolean {
   const s = useSettingsStore.getState();
-  if (event === 'new-order') return s.soundEnabled;
-  if (event === 'order-canceled') return s.soundOrderCanceled;
-  return s.soundChatMessage;
+  switch (event) {
+    case 'new-order':
+      return s.soundEnabled;
+    case 'order-canceled':
+      return s.soundOrderCanceled;
+    case 'order-available':
+      return s.soundOrderAvailable;
+    case 'order-available-scheduled':
+      return s.soundOrderAvailableScheduled;
+    default:
+      return s.soundChatMessage;
+  }
 }
 
 /**
@@ -139,7 +183,7 @@ function isEnabled(event: SoundEvent): boolean {
  */
 export async function playSound(
   event: SoundEvent,
-  options: { force?: boolean; variant?: SoundVariant } = {},
+  options: { force?: boolean; variant?: SoundVariant; tone?: ListSoundTone } = {},
 ): Promise<void> {
   const state = useSettingsStore.getState();
   if (!options.force && !isEnabled(event)) return;
@@ -147,7 +191,11 @@ export async function playSound(
   try {
     await ensureAudioMode();
 
-    const key = sourceKeyFor(event, options.variant ?? state.soundVariant);
+    const key = sourceKeyFor(
+      event,
+      options.variant ?? state.soundVariant,
+      options.tone ?? toneFor(event),
+    );
     let player = players.get(key);
     if (!player) {
       player = createAudioPlayer(SOURCES[key]);

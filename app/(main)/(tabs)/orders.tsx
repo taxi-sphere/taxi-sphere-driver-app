@@ -19,11 +19,11 @@
  * @dependencies: useAvailableOrders, useScheduledOrders, useOrderActions,
  *                @/components/order/OrderCard, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-08 (1.5.44 — пустой список не выдаётся за отказ выдавать заказы)
+ * @updated: 2026-09-10 (1.5.54 — фильтр «Все / Сейчас / Предзаказы»)
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -45,8 +45,20 @@ import {
   Surface,
   useNotify,
 } from '@/components/ui';
-import { icon as iconTokens, spacing, useTheme, useThemedStyles, type Theme } from '@/lib/theme';
+import { haptics } from '@/lib/haptics';
+import {
+  icon as iconTokens,
+  radius,
+  spacing,
+  touch,
+  useTheme,
+  useThemedStyles,
+  type Theme,
+} from '@/lib/theme';
 import type { AvailableOrder, CurrentOrder } from '@/types/order';
+
+/** Род заказов в списке: все, только на сейчас, только предзаказы. */
+type OrderKind = 'all' | 'now' | 'scheduled';
 
 const ACCEPT_TIMER_SEC = 30;
 const DEFAULT_ETA_MIN = 5;
@@ -172,7 +184,37 @@ export default function OrdersScreen() {
     setPendingOrder(null);
   }, [accept.isPending]);
 
-  const list = orders ?? [];
+  /**
+   * Что показывать: всё, только на сейчас или только предзаказы (1.5.54).
+   *
+   * ФИЛЬТРУЕМ НА ТЕЛЕФОНЕ, А НЕ НА СЕРВЕРЕ. `scheduledAt` уже приходит в
+   * каждой карточке, список короткий (не длиннее `limit`), и переключение
+   * должно быть мгновенным — запрос на каждое нажатие превратил бы выбор
+   * режима в ожидание. Сервер при этом остаётся единственным, кто решает,
+   * ЧТО водителю вообще доступно: фильтр только прячет, но не добавляет.
+   */
+  const [orderKind, setOrderKind] = useState<OrderKind>('all');
+
+  // Через `useMemo`, а не `orders ?? []` прямо в теле: пустой литерал
+  // рождается заново на каждый рендер и пересчитывал бы всё, что от него
+  // зависит, — включая счётчики на кнопках фильтра.
+  const all = useMemo(() => orders ?? [], [orders]);
+  const list = useMemo(() => {
+    if (orderKind === 'now') return all.filter((o) => !o.scheduledAt);
+    if (orderKind === 'scheduled') return all.filter((o) => o.scheduledAt);
+    return all;
+  }, [all, orderKind]);
+
+  /** Сколько заказов каждого рода — числа на кнопках фильтра. */
+  const counts = useMemo(
+    () => ({
+      all: all.length,
+      now: all.filter((o) => !o.scheduledAt).length,
+      scheduled: all.filter((o) => o.scheduledAt).length,
+    }),
+    [all],
+  );
+
   const listLoading = isLoading;
   const listError = error;
   const reload = refetch;
@@ -258,6 +300,13 @@ export default function OrdersScreen() {
         />
       )}
 
+      {/* Переключатель рода заказов. Прячем, когда предзаказов нет вовсе:
+          фильтр из одного значимого варианта — лишний ряд кнопок на экране,
+          где место занимают карточки. */}
+      {counts.scheduled > 0 && (
+        <OrderKindFilter value={orderKind} counts={counts} onChange={setOrderKind} />
+      )}
+
       {/* `!isOffline` — страховка, а не необходимость: у запроса на паузе
           `isLoading` уже false (замерено, см. query-bridges.test.ts), так что
           скелетоны и без неё не крутились бы вечно. Условие оставлено, чтобы
@@ -312,6 +361,10 @@ export default function OrdersScreen() {
               blockedMessage={blockedMessage}
               offline={isOffline}
               driverOffline={isDriverOffline}
+              // Список пуст ИЗ-ЗА ФИЛЬТРА — это не «заказов нет», и говорить
+              // так значило бы врать: заказы есть, просто другого рода.
+              hiddenByFilter={all.length > 0 ? orderKind : null}
+              onShowAll={() => setOrderKind('all')}
               onGoToOrder={() => router.replace('/(main)/(tabs)/current')}
             />
           }
@@ -335,6 +388,77 @@ export default function OrdersScreen() {
 }
 
 /**
+ * Переключатель рода заказов над списком (1.5.54).
+ *
+ * ЗАЧЕМ. До этого свободные заказы и предзаказы лежали в списке вперемешку,
+ * и различить их можно было только по метке времени на карточке. Водителю
+ * это два разных решения: «взять сейчас и поехать» и «занять себе вечер».
+ * Числа на кнопках нужны не для красоты — без них переключение вслепую:
+ * нажал «Предзаказы», увидел пусто и не понял, фильтр это или их правда нет.
+ */
+function OrderKindFilter({
+  value,
+  counts,
+  onChange,
+}: {
+  value: OrderKind;
+  counts: Record<OrderKind, number>;
+  onChange: (next: OrderKind) => void;
+}) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+
+  const options: { key: OrderKind; label: string }[] = [
+    { key: 'all', label: 'Все' },
+    { key: 'now', label: 'Сейчас' },
+    { key: 'scheduled', label: 'Предзаказы' },
+  ];
+
+  return (
+    <View style={styles.filterRow}>
+      {options.map((option) => {
+        const active = option.key === value;
+        return (
+          <Pressable
+            key={option.key}
+            onPress={() => {
+              haptics.tap();
+              onChange(option.key);
+            }}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={`${option.label}, заказов: ${counts[option.key]}`}
+            style={[
+              styles.filterChip,
+              {
+                borderColor: active ? colors.primary : colors.border,
+                backgroundColor: active ? colors.primarySoft : 'transparent',
+              },
+            ]}
+          >
+            {/* Одна строка и сжатие кегля: «Предзаказы · 1» иначе не влезает
+                в треть ширины и обрезается многоточием — на эмуляторе это
+                выглядело как «Предзака…». Тот же приём уже применён к
+                кнопкам выбора в настройках. */}
+            <AppText
+              variant="label"
+              weight={active ? '700' : '500'}
+              style={{ color: active ? colors.primary : colors.textSecondary }}
+              center
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.8}
+            >
+              {option.label} · {counts[option.key]}
+            </AppText>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
  * Пустой список свободных заказов.
  *
  * Два принципиально разных случая под одним заголовком «пусто» — самая
@@ -346,6 +470,8 @@ function AvailableEmpty({
   blockedMessage,
   offline,
   driverOffline,
+  hiddenByFilter,
+  onShowAll,
   onGoToOrder,
 }: {
   blockedMessage: string | null;
@@ -353,6 +479,13 @@ function AvailableEmpty({
   offline: boolean;
   /** Водитель не на линии — заказы вообще не запрашивались. */
   driverOffline: boolean;
+  /**
+   * Заказы есть, но их скрыл фильтр. `null` — список пуст по-настоящему.
+   * Разница принципиальная: «заказов нет» при живых заказах — это ложь,
+   * из-за которой водитель уходит с экрана.
+   */
+  hiddenByFilter: OrderKind | null;
+  onShowAll: () => void;
   onGoToOrder: () => void;
 }) {
   // Раньше всего остального: водитель вне линии видел «Свободных заказов
@@ -377,6 +510,27 @@ function AvailableEmpty({
         tone="danger"
         title="Нет интернета"
         description="Заказы появятся здесь сами, как только связь вернётся"
+      />
+    );
+  }
+
+  // Заказы есть, просто другого рода — говорим именно это и даём вернуть
+  // полный список одним нажатием.
+  if (hiddenByFilter && hiddenByFilter !== 'all') {
+    return (
+      <EmptyState
+        icon="funnel-outline"
+        title={
+          hiddenByFilter === 'scheduled'
+            ? 'Предзаказов сейчас нет'
+            : 'Заказов на сейчас нет'
+        }
+        description={
+          hiddenByFilter === 'scheduled'
+            ? 'Есть заказы на сейчас — их видно в режиме «Все»'
+            : 'Есть предзаказы — их видно в режиме «Все»'
+        }
+        action={{ label: 'Показать все', onPress: onShowAll }}
       />
     );
   }
@@ -453,6 +607,24 @@ function Banner({
 const createStyles = (_t: Theme) =>
   StyleSheet.create({
     tabs: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.sm },
+    /* Полоса фильтра над списком: не карточка и не шапка — узкий ряд,
+       который не отнимает у карточек больше одной строки. */
+    filterRow: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.sm,
+    },
+    filterChip: {
+      flex: 1,
+      minHeight: touch.min,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: spacing.xs,
+      borderRadius: radius.md,
+      borderWidth: 1.5,
+    },
     list: { padding: spacing.lg, paddingTop: spacing.sm, gap: spacing.md },
     // Без этого пустое состояние прижимается к верху вместо центра списка.
     listEmpty: { flexGrow: 1 },

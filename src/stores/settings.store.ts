@@ -5,7 +5,7 @@
  *   Персистенция через AsyncStorage.
  * @dependencies: zustand, @react-native-async-storage/async-storage
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-10 (1.5.53 — звук по событиям, выбор сигнала и громкости)
+ * @updated: 2026-09-10 (1.5.54 — звук на заказ в свободных, отдельно для предзаказа)
  */
 
 import { create } from 'zustand';
@@ -27,6 +27,17 @@ export type SoundVariant = 'classic' | 'double' | 'insistent';
 
 /** Насколько громко играет сигнал относительно системной громкости. */
 export type SoundVolume = 'low' | 'normal' | 'high';
+
+/**
+ * Сигнал о заказе, ПОЯВИВШЕМСЯ В СПИСКЕ свободных.
+ *
+ * Отдельный набор от `SoundVariant`, а не тот же самый, и это важно.
+ * «Тебе предложили заказ, ответь за 20 секунд» и «в городе появился заказ,
+ * посмотри при случае» — разные новости, и звучать они обязаны по-разному:
+ * общий набор позволил бы выбрать один и тот же тембр обоим, и водитель
+ * начал бы дёргаться на каждый чужой заказ.
+ */
+export type ListSoundTone = 'soft' | 'double' | 'bell';
 
 interface SettingsState {
   serverUrl: string;
@@ -52,6 +63,20 @@ interface SettingsState {
   soundOrderCanceled: boolean;
   /** Сигнал на сообщение диспетчера. */
   soundChatMessage: boolean;
+  /**
+   * Сигнал, когда в свободных появился обычный заказ.
+   *
+   * Не то же, что `soundEnabled`: тот звучит, когда заказ предложили ЛИЧНО
+   * и надо отвечать сейчас. Этот — про список: заказ появился в городе,
+   * взять его может кто угодно, включая этого водителя.
+   */
+  soundOrderAvailable: boolean;
+  /** Сигнал, когда в свободных появился предзаказ. */
+  soundOrderAvailableScheduled: boolean;
+  /** Каким тембром звучит появление обычного заказа в списке. */
+  soundToneAvailable: ListSoundTone;
+  /** Каким тембром звучит появление предзаказа. */
+  soundToneAvailableScheduled: ListSoundTone;
   soundVariant: SoundVariant;
   soundVolume: SoundVolume;
   vibrationEnabled: boolean;
@@ -105,6 +130,10 @@ interface SettingsState {
   setSoundEnabled: (enabled: boolean) => void;
   setSoundOrderCanceled: (enabled: boolean) => void;
   setSoundChatMessage: (enabled: boolean) => void;
+  setSoundOrderAvailable: (enabled: boolean) => void;
+  setSoundOrderAvailableScheduled: (enabled: boolean) => void;
+  setSoundToneAvailable: (tone: ListSoundTone) => void;
+  setSoundToneAvailableScheduled: (tone: ListSoundTone) => void;
   setSoundVariant: (variant: SoundVariant) => void;
   setSoundVolume: (volume: SoundVolume) => void;
   setVibrationEnabled: (enabled: boolean) => void;
@@ -124,6 +153,14 @@ export const useSettingsStore = create<SettingsState>()(
       soundEnabled: true,
       soundOrderCanceled: true,
       soundChatMessage: true,
+      soundOrderAvailable: true,
+      // Предзаказ по умолчанию МОЛЧИТ: он не срочный — его берут, когда
+      // планируют смену, а не бросая руль. Кому нужно, включает сам.
+      soundOrderAvailableScheduled: false,
+      soundToneAvailable: 'double',
+      // Другой тембр по умолчанию, чем у обычного заказа: если водитель
+      // включит оба, он должен различать их не глядя.
+      soundToneAvailableScheduled: 'bell',
       soundVariant: 'classic',
       soundVolume: 'normal',
       vibrationEnabled: true,
@@ -139,6 +176,12 @@ export const useSettingsStore = create<SettingsState>()(
       setSoundEnabled: (soundEnabled) => set({ soundEnabled }),
       setSoundOrderCanceled: (soundOrderCanceled) => set({ soundOrderCanceled }),
       setSoundChatMessage: (soundChatMessage) => set({ soundChatMessage }),
+      setSoundOrderAvailable: (soundOrderAvailable) => set({ soundOrderAvailable }),
+      setSoundOrderAvailableScheduled: (soundOrderAvailableScheduled) =>
+        set({ soundOrderAvailableScheduled }),
+      setSoundToneAvailable: (soundToneAvailable) => set({ soundToneAvailable }),
+      setSoundToneAvailableScheduled: (soundToneAvailableScheduled) =>
+        set({ soundToneAvailableScheduled }),
       setSoundVariant: (soundVariant) => set({ soundVariant }),
       setSoundVolume: (soundVolume) => set({ soundVolume }),
       setVibrationEnabled: (vibrationEnabled) => set({ vibrationEnabled }),
