@@ -93,6 +93,14 @@ export interface IncomingOrderModalProps {
   etaViaCurrentTrip?: boolean;
   /** Загружается ли ETA с сервера — показывает спиннер вместо значения. */
   etaLoading?: boolean;
+  /**
+   * Кнопки быстрого выбора, присланные сервером (v1.100.11 / 1.5.55).
+   *
+   * Ближнюю лестницу задаёт админ службы: в большом городе три минуты
+   * обещать нельзя, а в посёлке пятнадцать — уже опоздание. Пусто —
+   * старый сервер, считаем сами.
+   */
+  etaPresets?: number[];
   /** Длительность таймера в секундах (обычно 30 для confirm, 15 для offer). */
   timerSec: number;
   /** Идёт ли сетевой запрос acceptOrder. */
@@ -348,6 +356,7 @@ export function IncomingOrderModal({
   mode,
   initialEtaMin,
   etaLoading,
+  etaPresets,
   etaViaCurrentTrip,
   timerSec,
   accepting,
@@ -364,10 +373,17 @@ export function IncomingOrderModal({
   /**
    * Пресеты считаются от РЕКОМЕНДАЦИИ сервера, а не от текущего значения:
    * иначе набор кнопок менялся бы под пальцем, пока водитель крутит стрелки.
+   *
+   * С 1.5.55 набор обычно приходит ГОТОВЫМ (`etaPresets`): ближнюю
+   * лестницу задаёт админ службы, и знать о ней может только сервер.
+   * Свой расчёт остаётся запасным — на старый сервер.
    */
   const presets = useMemo(
-    () => pickupEtaPresets(initialEtaMin ?? 5),
-    [initialEtaMin],
+    () =>
+      etaPresets && etaPresets.length > 0
+        ? etaPresets
+        : pickupEtaPresets(initialEtaMin ?? 5),
+    [etaPresets, initialEtaMin],
   );
 
   /**
