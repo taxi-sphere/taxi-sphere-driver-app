@@ -378,6 +378,7 @@ export default function OrdersScreen() {
         timerSec={ACCEPT_TIMER_SEC}
         initialEtaMin={etaQuery.data?.etaMin ?? DEFAULT_ETA_MIN}
         etaLoading={etaQuery.isFetching}
+        etaDistanceKm={etaQuery.data?.distanceKm}
         etaPresets={etaQuery.data?.presets}
         etaViaCurrentTrip={etaQuery.data?.viaCurrentTrip}
         accepting={accept.isPending}

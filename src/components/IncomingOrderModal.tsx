@@ -61,6 +61,7 @@ import type { AvailableOrder } from '@/types/order';
 import {
   pickupEtaPresets,
   balancedRows,
+  formatDistance,
   pickupEtaStep,
   stripSharedCityPrefix,
 } from '@/lib/utils';
@@ -93,6 +94,19 @@ export interface IncomingOrderModalProps {
   etaViaCurrentTrip?: boolean;
   /** Загружается ли ETA с сервера — показывает спиннер вместо значения. */
   etaLoading?: boolean;
+  /**
+   * Сколько ехать до подачи, км (сервер считает вместе с временем).
+   *
+   * ЗАЧЕМ РЯДОМ С МИНУТАМИ (1.5.56). Минуты — это оценка по пробкам, и
+   * водитель по ним не понимает, что стоит за числом: восемнадцать минут
+   * бывают и через три километра в час пик, и через пятнадцать по
+   * свободной трассе. Решение «брать или нет» он принимает по обоим
+   * числам сразу, а расстояние сервер уже считал и просто выбрасывал.
+   *
+   * `null` — провайдер расстояния не дал; тогда показываем одни минуты,
+   * а не прочерк рядом с ними.
+   */
+  etaDistanceKm?: number | null;
   /**
    * Кнопки быстрого выбора, присланные сервером (v1.100.11 / 1.5.55).
    *
@@ -356,6 +370,7 @@ export function IncomingOrderModal({
   mode,
   initialEtaMin,
   etaLoading,
+  etaDistanceKm,
   etaPresets,
   etaViaCurrentTrip,
   timerSec,
@@ -566,7 +581,12 @@ export function IncomingOrderModal({
                   ) : (
                     // «подача» в подписи обязательна: рядом с адресом голое
                     // «~N мин» читается как время поездки, а это время подачи.
-                    <Text style={styles.routeEta}>подача ~{etaMin} мин</Text>
+                    // Километры — там же и тем же цветом: это одна мысль
+                    // «сколько до подачи», а не две отдельные цифры (1.5.56).
+                    <Text style={styles.routeEta} numberOfLines={1}>
+                      подача{etaDistanceKm != null ? ` ${formatDistance(etaDistanceKm)} ·` : ''}{' '}
+                      ~{etaMin} мин
+                    </Text>
                   )}
                 </View>
                 <Text style={styles.routeAddress} numberOfLines={2}>
