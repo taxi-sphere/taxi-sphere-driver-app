@@ -74,6 +74,7 @@ import { useActiveOrders, activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
 import { useAvailableOrders } from '@/hooks/useAvailableOrders';
 import { arriveStop, releaseOrder, setWaiting } from '@/api/orders.api';
 import { nextPendingStop, stopActionLabel } from '@/lib/order-stop-progress';
+import { pickupEtaState } from '@/lib/pickup-eta';
 import { rideCostOf } from '@/lib/trip-receipt';
 import {
   waitingHint,
@@ -343,15 +344,33 @@ export default function CurrentOrderScreen() {
     };
   }, [order]);
 
-  // Тикаем только пока ожидание идёт: в остальное время секунды на экране
-  // не меняются, и будить отрисовку раз в секунду незачем.
+  /**
+   * Тикаем, когда на экране есть что отсчитывать: идёт ожидание либо
+   * водитель едет на подачу с обещанным временем.
+   *
+   * ДО 1.5.53 УСЛОВИЕ БЫЛО ТОЛЬКО ПРО ОЖИДАНИЕ — и обратный отсчёт подачи,
+   * появившийся в этой же версии, ЗАМЕРЗАЛ: `nowMs` оставался таким, каким
+   * был при открытии экрана. Проверено на эмуляторе: чип показывал «Подача
+   * 14 мин», когда до срока оставалось одиннадцать, и не менялся полторы
+   * минуты. Врал он при этом в опасную сторону — водитель считал, что
+   * времени больше, чем есть.
+   *
+   * Частота разная: ожиданию нужна секунда (там на экране бегут секунды),
+   * отсчёту подачи — десять, он показывает минуты. Лишние девять
+   * перерисовок в секунду на экране с картой не бесплатны.
+   */
   const waitingRunning = order?.meter?.waitingOn ?? false;
+  const pickupCountdownRunning =
+    order?.status === 'assigned' &&
+    Boolean(order?.pickupEtaConfirmedAt) &&
+    (order?.pickupEtaMin ?? 0) > 0;
+
   useEffect(() => {
-    if (!waitingRunning) return;
+    if (!waitingRunning && !pickupCountdownRunning) return;
     setNowMs(Date.now());
-    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    const id = setInterval(() => setNowMs(Date.now()), waitingRunning ? 1000 : 10_000);
     return () => clearInterval(id);
-  }, [waitingRunning]);
+  }, [waitingRunning, pickupCountdownRunning]);
 
   /**
    * Последний известный список активных заказов — для момента после
@@ -752,6 +771,20 @@ export default function CurrentOrderScreen() {
       ? order.meter
       : null;
 
+  /**
+   * Обратный отсчёт до времени подачи, которое водитель назвал сам.
+   *
+   * ТОЛЬКО НА ПОДАЧЕ. После «Я на месте» обещание исполнено — дальше
+   * считать нечего, а чип занимал бы место, нужное счётчику поездки.
+   *
+   * `nowMs` тикает раз в секунду для ожидания — отсчёт живёт на нём же,
+   * второй таймер здесь был бы лишним.
+   */
+  const pickupEta =
+    order.status === 'assigned'
+      ? pickupEtaState(order.pickupEtaConfirmedAt, order.pickupEtaMin, new Date(nowMs))
+      : null;
+
   /** Что сказать про ожидание одной строкой. `null` — говорить нечего. */
   const hint = headerMeter
     ? waitingHint({
@@ -901,6 +934,54 @@ export default function CurrentOrderScreen() {
          * целиком. Прятать было нечего, и водитель терял таймер ровно там,
          * где разбирается со стоимостью.
          */}
+        {/**
+         * Отсчёт до подачи — рядом со счётчиком, в той же полоске карты.
+         *
+         * Цветом, а не текстом: за рулём читают форму и цвет, а не слова.
+         * Спокойный — времени с запасом, жёлтый — меньше пяти минут,
+         * красный — срок прошёл, и это сказано прямо: клиент всё равно уже
+         * ждёт, а молчащий экран мешает водителю решить, звонить ли ему.
+         */}
+        {pickupEta ? (
+          <Surface
+            level={2}
+            padded={false}
+            radius={radius.pill}
+            style={[
+              styles.floatingChip,
+              pickupEta.level === 'late'
+                ? { backgroundColor: colors.dangerSoft }
+                : pickupEta.level === 'soon'
+                  ? { backgroundColor: colors.warningSoft }
+                  : null,
+            ]}
+          >
+            <Ionicons
+              name={pickupEta.level === 'late' ? 'alert-circle-outline' : 'time-outline'}
+              size={iconTokens.xs}
+              color={
+                pickupEta.level === 'late'
+                  ? colors.danger
+                  : pickupEta.level === 'soon'
+                    ? colors.warning
+                    : colors.textSecondary
+              }
+            />
+            <AppText
+              variant="labelStrong"
+              tone={
+                pickupEta.level === 'late'
+                  ? 'danger'
+                  : pickupEta.level === 'soon'
+                    ? 'warning'
+                    : 'muted'
+              }
+            >
+              {pickupEta.label}
+            </AppText>
+          </Surface>
+        ) : null}
+
         {headerMeter ? (
           <Surface level={2} padded={false} radius={radius.pill} style={styles.floatingChip}>
             <AppText variant="overline" tone="muted">

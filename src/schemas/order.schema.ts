@@ -210,6 +210,13 @@ export const currentOrderSchema = z.object({
   createdAt: z.string().optional(),
   assignedAt: z.string().nullable(),
   startedAt: z.string().nullable(),
+  /**
+   * Время подачи, которое водитель назвал сам при приёме — сервер
+   * v1.100.9+. `nullish` + default: на старом сервере полей нет, и
+   * обратный отсчёт просто не показывается, как было до 1.5.53.
+   */
+  pickupEtaMin: z.number().nullish().default(null),
+  pickupEtaConfirmedAt: z.string().nullish().default(null),
   serviceName: z.string().nullable(),
   /**
    * Населённый пункт заказа — приходит ТОЛЬКО когда он не свой (сервер

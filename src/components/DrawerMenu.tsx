@@ -58,6 +58,7 @@ import {
 } from '@/services/location.service';
 import { useDriverStore } from '@/stores/driver.store';
 import { useChatUnread } from '@/hooks/useDriverChat';
+import { useNewsUnread } from '@/hooks/useNews';
 import { driverLogger } from '@/services/logger.service';
 import { haptics } from '@/lib/haptics';
 import {
@@ -106,6 +107,7 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
    * это единственное место, откуда бейдж виден без открытия чата.
    */
   const unreadChat = useChatUnread();
+  const unreadNews = useNewsUnread();
 
   // Жест закрытия свайпом влево. Подхватываем горизонтальный swipe
   // (dx < 0) минимум на 50px ИЛИ с быстрой скоростью — и закрываем.
@@ -354,6 +356,14 @@ export function DrawerMenu({ visible, onClose }: DrawerMenuProps) {
             label="Диспетчер"
             badge={unreadChat}
             onPress={() => navigate('/(main)/chat')}
+          />
+          {/* Объявления (1.5.53). Раздел существовал на сервере и в
+            * админке с марта, а показать их водителю было негде. */}
+          <MenuItem
+            icon="megaphone-outline"
+            label="Объявления"
+            badge={unreadNews}
+            onPress={() => navigate('/(main)/news')}
           />
           <MenuItem
             icon="person-outline"

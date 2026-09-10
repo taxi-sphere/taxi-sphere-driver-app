@@ -138,6 +138,13 @@ function MainStack() {
           headerTitle: 'Настройки',
         }}
       />
+      {/* Разделы настроек (1.5.53). Заголовки задают сами экраны — здесь
+        * только регистрация в стеке. */}
+      <Stack.Screen name="settings/notifications" options={{ headerShown: true }} />
+      <Stack.Screen name="settings/map" options={{ headerShown: true }} />
+      <Stack.Screen name="settings/appearance" options={{ headerShown: true }} />
+      <Stack.Screen name="settings/server" options={{ headerShown: true }} />
+      <Stack.Screen name="settings/about" options={{ headerShown: true }} />
       <Stack.Screen
         name="balance/index"
         options={{
@@ -163,6 +170,13 @@ function MainStack() {
         options={{
           headerShown: true,
           headerTitle: 'Диспетчер',
+        }}
+      />
+      <Stack.Screen
+        name="news/index"
+        options={{
+          headerShown: true,
+          headerTitle: 'Объявления',
         }}
       />
     </Stack>

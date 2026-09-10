@@ -32,6 +32,7 @@ import { confirmScheduledOrder } from '@/api/orders.api';
 import { activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
 import { useDialog, useNotify } from '@/components/ui';
 import { haptics } from '@/lib/haptics';
+import { playSound } from '@/services/sound.service';
 
 /** Во сколько минут укладывается ответ — из события сервера. */
 function formatGrace(minutes: number): string {
@@ -50,6 +51,14 @@ export function ScheduledConfirmationWatcher() {
       // Вибрация до диалога: телефон часто лежит в держателе экраном к
       // водителю, но смотрит он на дорогу.
       haptics.tap();
+      /**
+       * Звук — тот же, что у нового заказа (1.5.53), и управляется тем же
+       * переключателем: по смыслу это предложение заказа, только
+       * заранее. Не ответить вовремя здесь дороже, чем пропустить обычный
+       * заказ: предзаказ передадут другому, а водитель на него уже
+       * рассчитывал.
+       */
+      void playSound('new-order');
 
       const choice = await ask({
         title: `Предзаказ № ${event.orderNumber}`,

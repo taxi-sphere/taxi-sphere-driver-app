@@ -64,6 +64,7 @@ import {
   stripSharedCityPrefix,
 } from '@/lib/utils';
 import { haptics } from '@/lib/haptics';
+import { playNewOrderSound } from '@/services/sound.service';
 import {
   radius,
   spacing,
@@ -389,6 +390,17 @@ export function IncomingOrderModal({
   useEffect(() => {
     if (!visible || mode !== 'offer') return;
     haptics.incoming();
+    /**
+     * Звук — вместе с вибрацией и по тем же причинам (1.5.53). Телефон в
+     * держателе на ходу трясётся сам, и вибрацию водитель не различает;
+     * звук пробивается. Играет один раз: повтор каждые несколько секунд
+     * превратил бы кабину в сигнализацию, а предложение и так висит на
+     * экране.
+     *
+     * Молчит, если водитель выключил звук в настройках, — проверку делает
+     * сама служба.
+     */
+    void playNewOrderSound();
     return () => haptics.stop();
   }, [visible, mode]);
 

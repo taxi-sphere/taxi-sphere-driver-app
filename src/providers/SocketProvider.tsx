@@ -7,7 +7,7 @@
  *   Инвалидирует React Query при получении событий.
  * @dependencies: socket.service, auth.store, token.service, @tanstack/react-query
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-09 (1.5.52 — сообщения диспетчера: бейдж и уведомление)
+ * @updated: 2026-09-10 (1.5.53 — звук на отмену заказа и сообщение диспетчера)
  */
 
 import { useEffect, useRef } from 'react';
@@ -17,6 +17,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { useChatStore } from '@/stores/chat.store';
 import { socketService } from '@/services/socket.service';
 import { showLocalNotification } from '@/services/notification.service';
+import { playSound } from '@/services/sound.service';
 import * as tokenService from '@/services/token.service';
 import { getApiBase, API_TIMEOUT_MS, fetchServerConfig } from '@/lib/constants';
 
@@ -145,6 +146,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     });
 
     const unsubCanceled = socketService.onOrderCanceled((data) => {
+      /**
+       * Звук отмены (1.5.53) — водитель едет на подачу и должен узнать об
+       * этом раньше, чем доедет. Тембр НИСХОДЯЩИЙ, не похожий на заказ:
+       * два сигнала, которые путают между собой, хуже одного.
+       */
+      void playSound('order-canceled');
       // Сброс кэша сразу, чтобы placeholderData не удерживал отменённый заказ
       queryClient.setQueryData(['orders', 'current'], null);
       void queryClient.invalidateQueries({ queryKey: ['orders', 'current'] });
@@ -219,6 +226,10 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: ['chat'] });
       if (data?.authorRole === 'driver') return;
 
+      // Сообщение диспетчера обычно требует ответа сейчас, а не через
+      // полчаса. Сигнал тише и короче заказного — он не про срочность
+      // заказа, а про то, что с водителем говорят.
+      void playSound('chat-message');
       useChatStore.getState().noteIncoming();
       if (AppState.currentState !== 'active') {
         void showLocalNotification(

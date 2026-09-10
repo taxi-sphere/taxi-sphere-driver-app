@@ -5,7 +5,7 @@
  *   Персистенция через AsyncStorage.
  * @dependencies: zustand, @react-native-async-storage/async-storage
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-09 (1.5.52 — убраны неработавшие «Звук» и «Голосовые оповещения»)
+ * @updated: 2026-09-10 (1.5.53 — звук по событиям, выбор сигнала и громкости)
  */
 
 import { create } from 'zustand';
@@ -16,20 +16,44 @@ import type { MapOrientation } from '@/lib/map-orientation';
 type NavigatorApp = 'yandex' | '2gis' | 'google';
 type ThemeMode = 'light' | 'dark' | 'system';
 
+/**
+ * Какой сигнал играет на новый заказ.
+ *
+ * Три, а не десять: в машине с музыкой и открытым окном решает громкость,
+ * а не тембр. Отличаться сигнал должен от ЧУЖИХ телефонов в потоке — для
+ * этого хватает трёх непохожих.
+ */
+export type SoundVariant = 'classic' | 'double' | 'insistent';
+
+/** Насколько громко играет сигнал относительно системной громкости. */
+export type SoundVolume = 'low' | 'normal' | 'high';
+
 interface SettingsState {
   serverUrl: string;
   /**
-   * 1.5.52: `soundEnabled` и `voiceAlerts` УДАЛЕНЫ.
+   * Звуковой сигнал о новом заказе.
    *
-   * Оба хранились с первой версии и не читались нигде: переключатели в
-   * настройках меняли значение в этом хранилище, и на этом всё
-   * заканчивалось. Водитель считал, что звук включён, а заказ приходил
-   * молча. Сохранённые значения остаются в AsyncStorage мёртвым грузом —
-   * `persist` лишние ключи молча игнорирует, так что чистить их незачем.
+   * ИСТОРИЯ. Этот переключатель существовал с первой версии и НЕ ЧИТАЛСЯ
+   * НИГДЕ: значение сохранялось, и на этом всё заканчивалось. Водитель
+   * считал, что звук включён, а заказ приходил молча. В 1.5.52 его убрали
+   * как ложное обещание, в 1.5.53 вернули уже рабочим — сигнал играет
+   * `@/services/sound.service`.
    *
-   * Звуковой сигнал о заказе заведён задачей MOB-046: он требует
-   * звукового файла в сборке и решения, как звучать поверх музыки.
+   * `voiceAlerts` (голосовые оповещения) удалён насовсем: он тоже не
+   * читался, но за ним нет функции — только замысел.
    */
+  soundEnabled: boolean;
+  /**
+   * Сигнал, когда диспетчер снял заказ.
+   *
+   * Отдельно от заказа: водитель едет на подачу и должен узнать об отмене
+   * раньше, чем доедет, — но кому-то этот сигнал в потоке мешает.
+   */
+  soundOrderCanceled: boolean;
+  /** Сигнал на сообщение диспетчера. */
+  soundChatMessage: boolean;
+  soundVariant: SoundVariant;
+  soundVolume: SoundVolume;
   vibrationEnabled: boolean;
   preferredNavigator: NavigatorApp;
   themeMode: ThemeMode;
@@ -78,6 +102,11 @@ interface SettingsState {
   mapOrientation: MapOrientation;
 
   setServerUrl: (url: string) => void;
+  setSoundEnabled: (enabled: boolean) => void;
+  setSoundOrderCanceled: (enabled: boolean) => void;
+  setSoundChatMessage: (enabled: boolean) => void;
+  setSoundVariant: (variant: SoundVariant) => void;
+  setSoundVolume: (volume: SoundVolume) => void;
   setVibrationEnabled: (enabled: boolean) => void;
   setPreferredNavigator: (nav: NavigatorApp) => void;
   setThemeMode: (mode: ThemeMode) => void;
@@ -92,6 +121,11 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       serverUrl: '',
+      soundEnabled: true,
+      soundOrderCanceled: true,
+      soundChatMessage: true,
+      soundVariant: 'classic',
+      soundVolume: 'normal',
       vibrationEnabled: true,
       preferredNavigator: 'yandex',
       themeMode: 'system',
@@ -102,6 +136,11 @@ export const useSettingsStore = create<SettingsState>()(
       mapOrientation: 'course',
 
       setServerUrl: (serverUrl) => set({ serverUrl }),
+      setSoundEnabled: (soundEnabled) => set({ soundEnabled }),
+      setSoundOrderCanceled: (soundOrderCanceled) => set({ soundOrderCanceled }),
+      setSoundChatMessage: (soundChatMessage) => set({ soundChatMessage }),
+      setSoundVariant: (soundVariant) => set({ soundVariant }),
+      setSoundVolume: (soundVolume) => set({ soundVolume }),
       setVibrationEnabled: (vibrationEnabled) => set({ vibrationEnabled }),
       setPreferredNavigator: (preferredNavigator) =>
         set({ preferredNavigator }),

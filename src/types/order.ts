@@ -151,6 +151,10 @@ export interface CurrentOrder {
   createdAt?: string;
   assignedAt: string | null;
   startedAt: string | null;
+  /** Сколько минут до подачи обещал водитель при приёме заказа. */
+  pickupEtaMin: number | null;
+  /** Когда обещание зафиксировано — от него идёт обратный отсчёт. */
+  pickupEtaConfirmedAt: string | null;
   serviceName: string | null;
   /** Телефон диспетчерской службы заказа. `null` — не заполнен в админке. */
   dispatcherPhone: string | null;

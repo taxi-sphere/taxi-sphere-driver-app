@@ -1,389 +1,101 @@
 /**
  * @file: app/(main)/settings/index.tsx
  * @description:
- *   Экран настроек: звук, вибрация, голосовые оповещения,
- *   выбор навигатора, версия приложения.
+ *   Настройки: список разделов.
  *
- *   v1.5.7: развёрнутый диалог «Проверить обновления» — показывает
- *   текущую и новую версию, changelog, размер APK, две кнопки
- *   Отмена / Обновить (последняя сразу запускает downloadAndInstallApk
- *   без ухода на другой экран). Раньше был минимальный alert без действий.
+ *   ПОЧЕМУ РАЗДЕЛЫ, А НЕ ОДИН ДЛИННЫЙ ЭКРАН (1.5.53). Настроек стало
+ *   двадцать, и на одном экране они занимали четыре прокрутки: чтобы
+ *   поменять громкость сигнала, водитель пролистывал тему, карту и
+ *   навигатор. Сворачиваемые секции здесь не помогают — на телефоне они
+ *   добавляют по нажатию к каждому поиску, а закрытая секция ничем не
+ *   отличается от отсутствующей.
+ *
+ *   Разделы устроены как в системных настройках телефона, и это главное их
+ *   достоинство: водителю не нужно учиться. Подпись под названием
+ *   перечисляет, что внутри, — иначе по словам «Уведомления» и «Сервер»
+ *   приходится угадывать.
  *
  * @dependencies:
- *   - settings.store
- *   - useAppUpdate
- *   - apk-installer (downloadAndInstallApk)
- *   v1.5.17: экран переведён на тему и общие компоненты. Отдельная ирония
- *   прежней версии: именно здесь стоял переключатель тёмной темы — и сам
- *   этот экран на неё не реагировал, как и остальные шестнадцать.
- *
+ *   - @/components/settings
+ *   - expo-router
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-09 (1.5.52 — убраны переключатели, которые ничего не делали)
+ * @updated: 2026-09-10 (1.5.53 — настройки разбиты на разделы)
  */
 
-import { useState } from 'react';
-import {
-  View,
-  Switch,
-  Pressable,
-  TextInput,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { ScrollView } from 'react-native';
+import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { useSettingsStore } from '@/stores/settings.store';
-import { useAppUpdate } from '@/hooks/useAppUpdate';
-import { useUpdateRequestStore } from '@/stores/update-request.store';
-import { haptics } from '@/lib/haptics';
-import { usableChangelog } from '@/lib/utils';
-import {
-  icon as iconTokens,
-  radius,
-  spacing,
-  text,
-  touch,
-  useTheme,
-  useThemedStyles,
-  type Theme,
-} from '@/lib/theme';
-import { AppText, Button, Divider, Screen, Surface , useConfirm, useNotify } from '@/components/ui';
-
-
-type NavigatorApp = 'yandex' | '2gis' | 'google';
-
-const NAVIGATORS: { value: NavigatorApp; label: string }[] = [
-  { value: 'yandex', label: 'Яндекс Навигатор' },
-  { value: '2gis', label: '2ГИС' },
-  { value: 'google', label: 'Google Maps' },
-];
-
-/**
- * Как повёрнута карта заказа.
- *
- * «Авто» здесь нет намеренно: разворачивать карту туда-сюда на каждой
- * остановке — верный способ сбить водителя с толку. Два честных режима,
- * между которыми он выбирает сам.
- */
-const MAP_ORIENTATIONS = [
-  { value: 'course', label: 'По курсу', icon: 'navigate-outline' },
-  { value: 'north', label: 'Север сверху', icon: 'compass-outline' },
-] as const;
-
-/** Варианты темы — подпись и значок для каждого. */
-const THEME_MODES = [
-  { value: 'system', label: 'Авто', icon: 'phone-portrait-outline' },
-  { value: 'light', label: 'Светлая', icon: 'sunny-outline' },
-  { value: 'dark', label: 'Тёмная', icon: 'moon-outline' },
-] as const;
+import { useThemedStyles } from '@/lib/theme';
+import { Screen } from '@/components/ui';
+import { Section, SettingLink, createSettingsStyles } from '@/components/settings';
 
 export default function SettingsScreen() {
-  const confirm = useConfirm();
-  const notify = useNotify();
-  const { colors } = useTheme();
-  const styles = useThemedStyles(createStyles);
-  const {
-    serverUrl,
-    vibrationEnabled,
-    preferredNavigator,
-    themeMode,
-    betaChannel,
-    keepScreenOn,
-    autoFollowMap,
-    setAutoFollowMap,
-    mapOrientation,
-    setServerUrl,
-    setVibrationEnabled,
-    setPreferredNavigator,
-    setThemeMode,
-    setBetaChannel,
-    setKeepScreenOn,
-    setMapOrientation,
-  } = useSettingsStore();
+  const styles = useThemedStyles(createSettingsStyles);
+  const router = useRouter();
 
-  const { channel, latest, hasUpdate, checking, refresh } = useAppUpdate();
-  const requestUpdate = useUpdateRequestStore((st) => st.request);
+  const soundEnabled = useSettingsStore((s) => s.soundEnabled);
+  const vibrationEnabled = useSettingsStore((s) => s.vibrationEnabled);
+  const mapOrientation = useSettingsStore((s) => s.mapOrientation);
+  const preferredNavigator = useSettingsStore((s) => s.preferredNavigator);
+  const themeMode = useSettingsStore((s) => s.themeMode);
+  const serverUrl = useSettingsStore((s) => s.serverUrl);
 
-  const [serverInput, setServerInput] = useState(serverUrl);
+  /**
+   * Подписи показывают ТЕКУЩЕЕ состояние, а не список возможностей.
+   *
+   * «Звук включён · вибрация включена» отвечает на вопрос, ради которого
+   * водитель и открыл настройки, — не заходя в раздел.
+   */
+  const soundSummary = [
+    soundEnabled ? 'звук включён' : 'звук выключен',
+    vibrationEnabled ? 'вибрация включена' : 'вибрация выключена',
+  ].join(' · ');
 
-  const handleBetaToggle = async (next: boolean) => {
-    if (next) {
-      // Explicit opt-in — предупреждаем о риске
-      const ok = await confirm({
-        title: 'Включить beta-канал?',
-        message:
-          'Beta-версии могут содержать нестабильные функции и баги. ' +
-          'Обычно они выпускаются на несколько дней раньше основных релизов ' +
-          'для проверки. Если что-то сломается — выключите этот переключатель ' +
-          'и переустановите основную (production) версию через админку.',
-        confirmLabel: 'Включить',
-        variant: 'danger',
-      });
-      if (ok) {
-        setBetaChannel(true);
-        // Немедленно перезапросить последнюю версию в новом канале
-        void refresh();
-      }
-    } else {
-      setBetaChannel(false);
-      void refresh();
-    }
-  };
+  const mapSummary = [
+    mapOrientation === 'course' ? 'по курсу' : 'север сверху',
+    NAVIGATOR_LABELS[preferredNavigator] ?? 'навигатор не выбран',
+  ].join(' · ');
 
-  const handleCheckNow = async () => {
-    await refresh();
-    if (hasUpdate && latest) {
-      // v1.5.7: развёрнутый диалог со сравнением версий, changelog'ом и
-      // двумя кнопками. Раньше был минимальный alert без действий —
-      // приходилось закрывать настройки и жать «Обновить» в баннере.
-      const currentVersion = Constants.expoConfig?.version ?? '—';
-      const sizeMb = latest.apkSizeBytes
-        ? Math.round(latest.apkSizeBytes / 1024 / 1024)
-        : null;
-      const parts = [
-        `Текущая версия: ${currentVersion}`,
-        `Новая версия: ${latest.latestVersion}`,
-        sizeMb ? `Размер: ~${sizeMb} МБ` : null,
-        // Ссылку на GitHub вместо описания водителю не показываем — см.
-        // usableChangelog.
-        usableChangelog(latest.changelog)
-          ? `\nЧто нового:\n${usableChangelog(latest.changelog)}`
-          : null,
-      ].filter(Boolean);
-      const ok = await confirm({
-        title: 'Доступно обновление',
-        message: parts.join('\n'),
-        confirmLabel: 'Обновить',
-      });
-      if (ok) {
-        // v1.5.11: делегируем скачивание AppUpdateNotifier'у — он смонтирован
-        // в корневом layout и показывает модалку с прогрессом. Раньше здесь
-        // вызывался downloadAndInstallApk напрямую, без колбэка прогресса:
-        // водитель жал «Обновить», и 100 МБ качались вслепую.
-        requestUpdate(latest);
-      }
-    } else {
-      await notify('Обновлений нет', 'У вас последняя версия.');
-    }
-  };
-
-  const handleSaveServer = () => {
-    const url = serverInput.trim().replace(/\/$/, '');
-    setServerUrl(url);
-    void notify('Сохранено', url ? `Сервер: ${url}` : 'Используется автоопределение');
-  };
+  const themeSummary =
+    themeMode === 'system' ? 'как в телефоне' : themeMode === 'dark' ? 'тёмная' : 'светлая';
 
   return (
     <Screen edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
-        {/* «Звук» и «Голосовые оповещения» убраны в 1.5.52: оба
-          * переключателя ничего не делали — значение сохранялось в
-          * настройках и не читалось нигде. Переключатель, который врёт,
-          * хуже отсутствующего: водитель считал, что звук включён, и не
-          * понимал, почему заказ приходит молча. Звуковой сигнал заведён
-          * отдельной задачей (MOB-046) — он требует звукового файла и
-          * решения про громкость поверх музыки в машине. */}
-        <Section title="Уведомления">
-          <SettingSwitch
-            label="Вибрация"
-            hint="Подтверждение нажатий и сигнал о новом заказе"
-            value={vibrationEnabled}
-            onValueChange={setVibrationEnabled}
+        <Section>
+          <SettingLink
+            icon="notifications-outline"
+            label="Уведомления и звук"
+            hint={soundSummary}
+            onPress={() => router.push('/(main)/settings/notifications')}
+          />
+          <SettingLink
+            icon="map-outline"
+            label="Карта и навигация"
+            hint={mapSummary}
+            onPress={() => router.push('/(main)/settings/map')}
+          />
+          <SettingLink
+            icon="color-palette-outline"
+            label="Оформление"
+            hint={themeSummary}
+            onPress={() => router.push('/(main)/settings/appearance')}
           />
         </Section>
 
-        <Section title="Тема оформления">
-          <View style={styles.themeRow}>
-            {THEME_MODES.map((mode) => {
-              const active = themeMode === mode.value;
-              return (
-                <Pressable
-                  key={mode.value}
-                  style={[
-                    styles.themeButton,
-                    {
-                      borderColor: active ? colors.primary : colors.border,
-                      backgroundColor: active ? colors.primarySoft : 'transparent',
-                    },
-                  ]}
-                  onPress={() => {
-                    haptics.tap();
-                    setThemeMode(mode.value);
-                  }}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: active }}
-                  accessibilityLabel={`Тема: ${mode.label}`}
-                >
-                  <Ionicons
-                    name={mode.icon}
-                    size={iconTokens.md}
-                    color={active ? colors.primary : colors.textMuted}
-                  />
-                  <AppText
-                    variant="label"
-                    weight={active ? '700' : '500'}
-                    tone={active ? 'brand' : 'muted'}
-                  >
-                    {mode.label}
-                  </AppText>
-                </Pressable>
-              );
-            })}
-          </View>
-        </Section>
-
-        <Section title="Карта">
-          <View style={styles.themeRow}>
-            {MAP_ORIENTATIONS.map((mode) => {
-              const active = mapOrientation === mode.value;
-              return (
-                <Pressable
-                  key={mode.value}
-                  style={[
-                    styles.themeButton,
-                    {
-                      borderColor: active ? colors.primary : colors.border,
-                      backgroundColor: active ? colors.primarySoft : 'transparent',
-                    },
-                  ]}
-                  onPress={() => {
-                    haptics.tap();
-                    setMapOrientation(mode.value);
-                  }}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: active }}
-                  accessibilityLabel={`Карта: ${mode.label}`}
-                >
-                  <Ionicons
-                    name={mode.icon}
-                    size={iconTokens.md}
-                    color={active ? colors.primary : colors.textMuted}
-                  />
-                  <AppText
-                    variant="label"
-                    weight={active ? '700' : '500'}
-                    tone={active ? 'brand' : 'muted'}
-                  >
-                    {mode.label}
-                  </AppText>
-                </Pressable>
-              );
-            })}
-          </View>
-          <AppText variant="caption" tone="muted" style={styles.sectionHint}>
-            {mapOrientation === 'course'
-              ? 'Карта разворачивается по движению: дорога впереди всегда вверху, стрелка смотрит вверх.'
-              : 'Север всегда сверху. Стрелка показывает, куда вы едете.'}
-          </AppText>
-          <Divider />
-          <SettingSwitch
-            label="Карта едет за машиной"
-            hint="Включено — карта сама возвращается к машине, когда вы поехали дальше. Выключено — стоит там, куда вы её поставили, а кнопка с прицелом ведёт карту по нажатию."
-            value={autoFollowMap}
-            onValueChange={setAutoFollowMap}
+        <Section>
+          <SettingLink
+            icon="server-outline"
+            label="Сервер и обновления"
+            hint={serverUrl ? serverUrl.replace(/^https?:\/\//, '') : 'автоопределение'}
+            onPress={() => router.push('/(main)/settings/server')}
           />
-          {/* 1.5.45: без этой строки водитель не узнает ни того, что карту
-              можно отодвинуть, ни того, что она вернётся сама. Поведение
-              новое, кнопка возврата появляется только когда карта отпущена —
-              то есть увидеть её заранее нельзя.
-              1.5.51: текст зависит от переключателя выше — иначе при
-              выключенном слежении подсказка обещала бы возврат, которого
-              больше не будет. */}
-          <AppText variant="caption" tone="muted" style={styles.sectionHint}>
-            {autoFollowMap
-              ? 'В заказе карта едет за машиной. Отодвиньте её пальцем — останется, как поставили, и вернётся к машине, когда поедете дальше. Кнопка со значком прицела возвращает сразу.'
-              : 'Карта в заказе остаётся там, куда вы её поставили. Кнопка со значком прицела ведёт её за машиной, пока вы снова не отодвинете карту пальцем.'}
-          </AppText>
-        </Section>
-
-        <Section title="Экран">
-          <SettingSwitch
-            label="Не гасить экран"
-            hint="Пока приложение открыто, экран не уходит в сон. Выключите, если бережёте заряд."
-            value={keepScreenOn}
-            onValueChange={setKeepScreenOn}
-          />
-        </Section>
-
-        <Section title="Навигатор">
-          {NAVIGATORS.map((nav, index) => (
-            <View key={nav.value}>
-              {index > 0 && <Divider />}
-              <Pressable
-                style={styles.row}
-                onPress={() => {
-                  haptics.tap();
-                  setPreferredNavigator(nav.value);
-                }}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: preferredNavigator === nav.value }}
-                accessibilityLabel={nav.label}
-              >
-                <AppText variant="body">{nav.label}</AppText>
-                <Ionicons
-                  name={
-                    preferredNavigator === nav.value ? 'radio-button-on' : 'radio-button-off'
-                  }
-                  size={iconTokens.lg}
-                  color={preferredNavigator === nav.value ? colors.primary : colors.textMuted}
-                />
-              </Pressable>
-            </View>
-          ))}
-        </Section>
-
-        <Section title="Сервер">
-          <View style={styles.serverBlock}>
-            <AppText variant="label" tone="muted">
-              Адрес сервера — оставьте пустым для автоопределения
-            </AppText>
-            <TextInput
-              style={styles.input}
-              value={serverInput}
-              onChangeText={setServerInput}
-              placeholder="https://taxitest1.appvault.pro"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              accessibilityLabel="Адрес сервера"
-            />
-            <Button onPress={handleSaveServer} variant="secondary" fullWidth>
-              Сохранить
-            </Button>
-          </View>
-        </Section>
-
-        <Section title="О приложении">
-          <InfoRow label="Версия" value={Constants.expoConfig?.version ?? '?'} />
-          <Divider />
-          <InfoRow label="Канал обновлений" value={channel === 'beta' ? 'Beta' : 'Production'} />
-          <Divider />
-          <Pressable
-            style={styles.row}
-            onPress={() => void handleCheckNow()}
-            disabled={checking}
-            accessibilityRole="button"
-            accessibilityLabel="Проверить обновления"
-          >
-            <AppText variant="body" tone="brand">
-              {checking ? 'Проверяю…' : 'Проверить обновления'}
-            </AppText>
-            {checking ? (
-              <ActivityIndicator size="small" color={colors.primary} />
-            ) : (
-              <Ionicons name="refresh" size={iconTokens.md} color={colors.primary} />
-            )}
-          </Pressable>
-        </Section>
-
-        <Section title="Разработчику">
-          <SettingSwitch
-            label="Beta-канал обновлений"
-            hint="Предварительные версии раньше остальных. Могут быть нестабильны."
-            value={betaChannel}
-            onValueChange={handleBetaToggle}
+          <SettingLink
+            icon="information-circle-outline"
+            label="О приложении"
+            hint={`Версия ${Constants.expoConfig?.version ?? '?'}`}
+            onPress={() => router.push('/(main)/settings/about')}
           />
         </Section>
       </ScrollView>
@@ -391,124 +103,8 @@ export default function SettingsScreen() {
   );
 }
 
-/* ─── Вспомогательные компоненты ──────────────────────────────────────── */
-
-/** Заголовок раздела плюс карточка с его содержимым. */
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  const styles = useThemedStyles(createStyles);
-
-  return (
-    <View style={styles.section}>
-      <AppText variant="overline" tone="muted" style={styles.sectionTitle}>
-        {title}
-      </AppText>
-      <Surface level={1} padded={false} style={styles.card}>
-        {children}
-      </Surface>
-    </View>
-  );
-}
-
-function SettingSwitch({
-  label,
-  hint,
-  value,
-  onValueChange,
-}: {
-  label: string;
-  hint?: string;
-  value: boolean;
-  onValueChange: (v: boolean) => void;
-}) {
-  const { colors } = useTheme();
-  const styles = useThemedStyles(createStyles);
-
-  return (
-    <View style={styles.row}>
-      <View style={styles.rowText}>
-        <AppText variant="body">{label}</AppText>
-        {hint ? (
-          <AppText variant="caption" tone="muted">
-            {hint}
-          </AppText>
-        ) : null}
-      </View>
-      <Switch
-        value={value}
-        onValueChange={(next) => {
-          // Вибрация до записи в стор: иначе выключение «Вибрации» само
-          // себя и заглушит, и подтверждения нажатия водитель не получит.
-          haptics.tap();
-          onValueChange(next);
-        }}
-        trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
-        thumbColor={value ? colors.primary : colors.surface}
-        accessibilityLabel={label}
-      />
-    </View>
-  );
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  const styles = useThemedStyles(createStyles);
-
-  return (
-    <View style={styles.row}>
-      <AppText variant="body" tone="secondary">
-        {label}
-      </AppText>
-      <AppText variant="bodyStrong">{value}</AppText>
-    </View>
-  );
-}
-
-/* ─── Стили ─────────────────────────────────────────────────────────── */
-
-const createStyles = (t: Theme) =>
-  StyleSheet.create({
-    content: { padding: spacing.lg, gap: spacing.lg, paddingBottom: spacing.xxxl + spacing.lg },
-    section: { gap: spacing.sm },
-    sectionTitle: { paddingHorizontal: spacing.xs },
-    card: { overflow: 'hidden' },
-    // Минимум 56: строки настроек жмут пальцем, а не курсором.
-    row: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      gap: spacing.md,
-      minHeight: touch.primary,
-      paddingHorizontal: spacing.lg,
-      paddingVertical: spacing.md,
-    },
-    rowText: { flex: 1, gap: 2 },
-
-    themeRow: { flexDirection: 'row', gap: spacing.sm, padding: spacing.md },
-    // Подпись объясняет выбранный режим словами — иконки на кнопках
-    // сами по себе не говорят, что произойдёт с картой.
-    sectionHint: {
-      paddingHorizontal: spacing.md,
-      paddingBottom: spacing.md,
-    },
-    themeButton: {
-      flex: 1,
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: spacing.xs,
-      paddingVertical: spacing.md,
-      borderRadius: radius.md,
-      borderWidth: 1.5,
-      minHeight: touch.primary,
-    },
-
-    serverBlock: { padding: spacing.lg, gap: spacing.md },
-    input: {
-      height: 52,
-      borderWidth: 1,
-      borderColor: t.colors.border,
-      borderRadius: radius.md,
-      paddingHorizontal: spacing.lg,
-      fontSize: text.body.fontSize,
-      color: t.colors.textPrimary,
-      backgroundColor: t.colors.surfaceSunken,
-    },
-  });
+const NAVIGATOR_LABELS: Record<string, string> = {
+  yandex: 'Яндекс Навигатор',
+  '2gis': '2ГИС',
+  google: 'Google Maps',
+};
