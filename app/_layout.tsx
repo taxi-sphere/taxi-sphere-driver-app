@@ -5,12 +5,14 @@
  *   ErrorBoundary для крэшей React-дерева и глобальный JS-обработчик
  *   через ErrorUtils.setGlobalHandler для ошибок вне React.
  *
- *   v1.5.5: `useKeepAwake()` не даёт экрану гаснуть, пока приложение
- *   в foreground. Работает **всегда**, без привязки к статусу — по
- *   явному решению: диспетчеру и водителю важнее непрерывный обзор
- *   заказов/карты, чем экономия батареи (батарея сядет быстрее, но
- *   у водителей в такси всегда есть зарядка в машине).
- *   Требует пермишн WAKE_LOCK (уже есть в app.json).
+ *   1.5.57: БЛОКИРОВКИ ЭКРАНА ЗДЕСЬ БОЛЬШЕ НЕТ. С v1.5.5 корень держал
+ *   безусловный `useKeepAwake()`, а с 1.5.42 рядом появилась своя,
+ *   настраиваемая — `useKeepScreenOn()` в `(main)/_layout`. Пока корневая
+ *   держала флаг, переключатель «Не гасить экран» не выключал ничего:
+ *   настройка снимала свою блокировку, а вторая оставалась. Осталась одна —
+ *   в рабочей части приложения, у настройки. Побочно это значит, что на
+ *   экранах входа экран теперь гаснет как обычно; там водитель и не работает.
+ *   Пермишн WAKE_LOCK по-прежнему нужен (есть в app.json).
  *
  *   v1.5.17: два добавления в корень.
  *   • `GestureHandlerRootView` — его не было, хотя
@@ -37,7 +39,6 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import * as SystemUI from 'expo-system-ui';
-import { useKeepAwake } from 'expo-keep-awake';
 import { AppProviders } from '@/providers/AppProviders';
 import { ScheduledConfirmationWatcher } from '@/components/ScheduledConfirmationWatcher';
 import { OrderCanceledWatcher } from '@/components/OrderCanceledWatcher';
@@ -101,15 +102,6 @@ function installGlobalErrorHandler() {
 installGlobalErrorHandler();
 
 export default function RootLayout() {
-  // v1.5.5: держим экран включённым всё время, пока приложение открыто.
-  // Возможные аргументы «а как же батарея» — сознательно отклонены:
-  //   • водитель на смене видит карту и заказы, гаснущий экран мешает;
-  //   • в машине почти всегда есть зарядка (12V/USB);
-  //   • foreground-service GPS всё равно уже жжёт батарею.
-  // Если появится жалоба на разряд — сделать селективно по `useDriverStatus`
-  // (deactivate когда 'offline').
-  useKeepAwake();
-
   const isReady = useAuthStore((s) => s.isReady);
   const theme = useTheme();
 

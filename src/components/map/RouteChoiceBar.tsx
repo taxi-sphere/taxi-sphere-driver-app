@@ -13,26 +13,57 @@
  *   границы шторки — место, куда водитель и так смотрит, переводя взгляд с
  *   дороги на адрес.
  *
- *   ПАНЕЛЬ ПОКАЗЫВАЕТСЯ НЕ ВСЕГДА. Только когда пути расходятся ощутимо
- *   (`hasRealChoice`) и водитель ещё не выбрал. Предлагать выбор из двух
- *   почти одинаковых линий — отвлекать за рулём ради ничего.
+ *   СВЁРНУТО ПО УМОЛЧАНИЮ (1.5.57). До этого пара вариантов висела на карте
+ *   всё время, пока водитель не ткнёт в один из них: убрать её, не выбирая,
+ *   было нечем — и она закрывала кусок карты у самой шторки. Теперь внизу
+ *   справа стоит одна кнопка, а ряд раскрывается по нажатию.
  *
- * @dependencies: @/lib/theme, @/lib/route-choice, @/components/ui
+ *   ПОВТОРНОЕ НАЖАТИЕ НА АКТИВНУЮ КНОПКУ СВОРАЧИВАЕТ РЯД. Отдельного
+ *   крестика нет намеренно: за рулём меньше целей — лучше, а «ткнуть ещё раз
+ *   в то, что уже выбрано» — единственное нажатие, которому в этом ряду
+ *   нечего было делать. Выбранный маршрут при этом остаётся.
+ *
+ *   СВЁРНУТАЯ КНОПКА ГОВОРИТ СОСТОЯНИЕ. Если линия убрана, она пишет
+ *   «Маршрут скрыт», а не «Маршруты»: иначе пустая карта читается как «не
+ *   построился», и водитель гадает, ждать ему или нажимать.
+ *
+ * @dependencies: @/lib/theme, @/components/ui, @/api/routing.api,
+ *   @/lib/route-panel (что значит нажатие — там же и тесты)
  * @created: 2026-09-09 (1.5.49)
+ * @updated: 2026-09-10 (1.5.57 — сворачивается, третий вариант «Без маршрута»)
  */
 
+import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { AppText } from '@/components/ui/Text';
 import { Surface } from '@/components/ui/Surface';
 import { useTheme, useThemedStyles, type Theme } from '@/lib/theme';
 import { radius, spacing } from '@/lib/design/tokens';
 import type { RouteVariant } from '@/api/routing.api';
+import {
+  isRoutePanelTargetActive,
+  routePanelAction,
+  type RoutePanelTarget,
+} from '@/lib/route-panel';
+
+/**
+ * Сколько вариантов показывать.
+ *
+ * Два, хотя роутер иногда отдаёт три: рядом с ними стоит «Без маршрута», и
+ * четыре подписи с числами в ширину телефона уже не читаются на ходу. Две
+ * первые — самая быстрая и самая непохожая на неё, то есть ровно тот выбор,
+ * ради которого панель и заведена.
+ */
+const MAX_VARIANTS = 2;
 
 interface RouteChoiceBarProps {
   variants: RouteVariant[];
-  /** Уже выбранный вариант — панель сворачивается в отметку со сбросом. */
-  chosen: boolean;
+  /** Какой вариант ведёт сейчас; 0 — быстрый. */
+  chosenIndex: number;
+  /** Линия убрана с карты. */
+  hidden: boolean;
   onChoose: (index: number) => void;
+  onHide: () => void;
   /** Высота шторки: панель стоит НАД ней, а не под. */
   bottomInset: number;
 }
@@ -51,29 +82,28 @@ function variantLabel(variant: RouteVariant): string {
 
 export function RouteChoiceBar({
   variants,
-  chosen,
+  chosenIndex,
+  hidden,
   onChoose,
+  onHide,
   bottomInset,
 }: RouteChoiceBarProps) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const [open, setOpen] = useState(false);
 
-  /**
-   * Порядок проверок важен: сначала «выбор сделан», и только потом «есть ли
-   * из чего выбирать».
-   *
-   * После выбора маршрут строится ЧЕРЕЗ опорную точку, а роутер отдаёт
-   * варианты только для запроса из двух координат — значит вариант приходит
-   * ровно один. Проверь мы сначала их число, кнопка сброса исчезла бы сразу
-   * после выбора, и отменить его было бы нечем (поймано на эмуляторе).
-   */
-  if (chosen) {
+  if (!open) {
     return (
       <View style={[styles.wrap, { bottom: bottomInset + spacing.md }]}>
-        <Pressable onPress={() => onChoose(0)} accessibilityRole="button">
-          <Surface level={2} padded={false} radius={radius.pill} style={styles.reset}>
-            <AppText variant="labelStrong" tone="muted">
-              Свой маршрут · сбросить
+        <Pressable
+          onPress={() => setOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel={hidden ? 'Маршрут скрыт, открыть выбор' : 'Варианты маршрута'}
+          style={({ pressed }) => [styles.collapsed, { opacity: pressed ? 0.7 : 1 }]}
+        >
+          <Surface level={2} padded={false} radius={radius.pill} style={styles.pill}>
+            <AppText variant="labelStrong" tone={hidden ? 'warning' : 'secondary'}>
+              {hidden ? 'Маршрут скрыт' : 'Маршруты'}
             </AppText>
           </Surface>
         </Pressable>
@@ -81,31 +111,96 @@ export function RouteChoiceBar({
     );
   }
 
-  if (variants.length < 2) return null;
+  const shown = variants.slice(0, MAX_VARIANTS);
 
   return (
     <View style={[styles.wrap, { bottom: bottomInset + spacing.md }]}>
       <View style={styles.row}>
-        {variants.slice(0, 3).map((variant, index) => (
-          <Pressable
-            key={index}
-            onPress={() => onChoose(index)}
-            accessibilityRole="button"
-            accessibilityLabel={`Вариант пути: ${variantLabel(variant)}`}
-            style={({ pressed }) => [styles.item, { opacity: pressed ? 0.7 : 1 }]}
+        {shown.map((variant, index) => {
+          const target: RoutePanelTarget = { kind: 'variant', index };
+          const active = isRoutePanelTargetActive(target, { chosenIndex, hidden });
+          return (
+            <Pressable
+              key={index}
+              // Что значит нажатие — решает `routePanelAction`: правило одно
+              // на все три кнопки и покрыто тестами (`@/lib/route-panel`).
+              onPress={() =>
+                routePanelAction(target, { chosenIndex, hidden }) === 'collapse'
+                  ? setOpen(false)
+                  : onChoose(index)
+              }
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={
+                active
+                  ? `Выбрано: ${variantLabel(variant)}. Нажмите, чтобы свернуть`
+                  : `Вариант пути: ${variantLabel(variant)}`
+              }
+              style={({ pressed }) => [styles.item, { opacity: pressed ? 0.7 : 1 }]}
+            >
+              <Surface
+                level={2}
+                padded={false}
+                radius={radius.lg}
+                style={[
+                  styles.card,
+                  active && {
+                    backgroundColor: colors.primarySoft,
+                    borderColor: colors.primary,
+                  },
+                ]}
+              >
+                {/* Первый вариант роутера — самый быстрый. Подпись нужна:
+                    без неё два числа рядом не говорят, чем они отличаются. */}
+                <AppText
+                  variant="caption"
+                  tone={active ? 'brand' : index === 0 ? 'success' : 'muted'}
+                >
+                  {index === 0 ? 'быстрее' : 'другой путь'}
+                </AppText>
+                <AppText
+                  variant="labelStrong"
+                  style={{ color: active ? colors.primary : colors.textPrimary }}
+                >
+                  {variantLabel(variant)}
+                </AppText>
+              </Surface>
+            </Pressable>
+          );
+        })}
+
+        <Pressable
+          onPress={() =>
+            routePanelAction({ kind: 'noRoute' }, { chosenIndex, hidden }) === 'collapse'
+              ? setOpen(false)
+              : onHide()
+          }
+          accessibilityRole="button"
+          accessibilityState={{ selected: hidden }}
+          accessibilityLabel={
+            hidden ? 'Маршрут скрыт. Нажмите, чтобы свернуть' : 'Убрать маршрут с карты'
+          }
+          style={({ pressed }) => [styles.noRoute, { opacity: pressed ? 0.7 : 1 }]}
+        >
+          <Surface
+            level={2}
+            padded={false}
+            radius={radius.lg}
+            style={[
+              styles.card,
+              hidden && {
+                backgroundColor: colors.primarySoft,
+                borderColor: colors.primary,
+              },
+            ]}
           >
-            <Surface level={2} padded={false} radius={radius.lg} style={styles.card}>
-              {/* Первый вариант роутера — самый быстрый. Подпись нужна:
-                  без неё два числа рядом не говорят, чем они отличаются. */}
-              <AppText variant="caption" tone={index === 0 ? 'success' : 'muted'}>
-                {index === 0 ? 'быстрее' : 'другой путь'}
-              </AppText>
-              <AppText variant="labelStrong" style={{ color: colors.textPrimary }}>
-                {variantLabel(variant)}
-              </AppText>
-            </Surface>
-          </Pressable>
-        ))}
+            {/* Без чисел: их у этого варианта нет, а место в ряду есть у всех
+                троих только пока подпись короткая. */}
+            <AppText variant="labelStrong" tone={hidden ? 'brand' : 'muted'} center>
+              Без{'\n'}маршрута
+            </AppText>
+          </Surface>
+        </Pressable>
       </View>
     </View>
   );
@@ -119,18 +214,26 @@ const createStyles = (t: Theme) =>
       right: spacing.lg,
       alignItems: 'center',
     },
-    row: { flexDirection: 'row', gap: spacing.sm },
+    /** Свёрнутая — внизу СПРАВА, как её и просили: под большой палец. */
+    collapsed: { alignSelf: 'flex-end' },
+    pill: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs + 2,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+    },
+    row: { flexDirection: 'row', gap: spacing.sm, alignItems: 'stretch' },
     item: { flexShrink: 1 },
+    /** Третья кнопка уже двух остальных: у неё нет чисел. */
+    noRoute: { flexShrink: 0 },
     card: {
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.sm,
       alignItems: 'center',
+      justifyContent: 'center',
       gap: 2,
       borderWidth: 1,
       borderColor: t.colors.border,
-    },
-    reset: {
-      paddingHorizontal: spacing.md,
-      paddingVertical: spacing.xs + 2,
+      height: '100%',
     },
   });

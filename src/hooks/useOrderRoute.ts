@@ -12,12 +12,12 @@
  * @dependencies: react-query, @/api/routing.api, @/lib/order-route-key,
  *   @/lib/route-choice
  * @created: 2026-09-04 (1.5.36)
- * @updated: 2026-09-09 (1.5.51 — выбор варианта пути перестраивает линию сразу)
+ * @updated: 2026-09-10 (1.5.57 — варианты запоминаются, линию можно скрыть)
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getOrderRoute, type OrderRoute } from '@/api/routing.api';
+import { getOrderRoute, type OrderRoute, type RouteVariant } from '@/api/routing.api';
 import { isSameRouteTarget, orderRouteKey } from '@/lib/order-route-key';
 import {
   isAnchorPassed,
@@ -36,12 +36,27 @@ export interface OrderRouteState {
   /** Линия, которую рисуем сейчас. */
   route: OrderRoute | null;
   /**
+   * Варианты, между которыми водитель выбирает.
+   *
+   * НЕ `route.routes`, и это важно. После выбора запрос уходит с опорной
+   * точкой, а на запрос через промежуточную точку роутер отдаёт РОВНО ОДИН
+   * путь — значит `route.routes` после первого же выбора перестаёт быть
+   * списком вариантов. Держим последний свободный ответ: только так
+   * водитель может ткнуть в соседний вариант и сравнить, а потом вернуться.
+   */
+  variants: RouteVariant[];
+  /** Какой из `variants` ведёт сейчас. 0 — быстрый, он же «выбора нет». */
+  chosenIndex: number;
+  /**
    * Выбран ли путь водителем вручную. Пока выбора нет, роутер волен
    * предлагать варианты; после выбора он ведёт через опорную точку.
    */
   chosen: boolean;
-  /** Выбрать вариант из `route.routes`. Индекс 0 — сбросить выбор. */
+  /** Выбрать вариант из `variants`. Индекс 0 — сбросить выбор. */
   choose: (index: number) => void;
+  /** Линию не рисуем: водитель выбрал «Без маршрута». */
+  hidden: boolean;
+  setHidden: (hidden: boolean) => void;
 }
 
 export function useOrderRoute({
@@ -64,9 +79,30 @@ export function useOrderRoute({
   const anchorRef = useRef<RoutePoint | null>(null);
   anchorRef.current = anchor;
 
-  /** Смена заказа или стадии — выбор к ним не относится. */
+  /** Какой вариант ведёт сейчас; 0 — быстрый. Хранится рядом с точкой. */
+  const [chosenIndex, setChosenIndex] = useState(0);
+
+  /**
+   * Варианты с последнего запроса БЕЗ опорной точки — см. `variants` в
+   * `OrderRouteState`.
+   */
+  const [variants, setVariants] = useState<RouteVariant[]>([]);
+
+  /** Водитель убрал линию с карты. */
+  const [hidden, setHidden] = useState(false);
+
+  /**
+   * Смена заказа или стадии — всё это к ним не относится.
+   *
+   * Скрытие сбрасывается здесь намеренно: водитель, спрятавший линию по
+   * дороге к клиенту, иначе поехал бы без неё и весь путь до места
+   * назначения — а туда он как раз дороги может не знать.
+   */
   useEffect(() => {
     setAnchor(null);
+    setChosenIndex(0);
+    setVariants([]);
+    setHidden(false);
   }, [orderId, status]);
 
   const query = useQuery({
@@ -107,8 +143,25 @@ export function useOrderRoute({
     const driver = lat != null && lng != null ? { latitude: lat, longitude: lng } : null;
     const line = route?.coordinates ?? [];
     const target = line.length > 0 ? line[line.length - 1]! : null;
-    if (isAnchorPassed(anchor, driver, target)) setAnchor(null);
+    if (isAnchorPassed(anchor, driver, target)) {
+      setAnchor(null);
+      // Развилка позади — выбор больше ни к чему не относится, и подсветка
+      // на кнопке соврала бы.
+      setChosenIndex(0);
+    }
   }, [anchor, lat, lng, route]);
+
+  /**
+   * Запомнить варианты — только со СВОБОДНОГО ответа.
+   *
+   * С опорной точкой роутер отдаёт один путь, и записать его сюда значило бы
+   * стереть список ровно в тот момент, когда водитель им пользуется.
+   */
+  useEffect(() => {
+    if (anchor) return;
+    const list = route?.routes ?? [];
+    if (list.length > 0) setVariants(list);
+  }, [route, anchor]);
 
   /**
    * Выбрать вариант.
@@ -121,8 +174,6 @@ export function useOrderRoute({
 
   const choose = useCallback(
     (index: number) => {
-      const variants = route?.routes ?? [];
-
       const next =
         index <= 0
           ? null
@@ -135,6 +186,11 @@ export function useOrderRoute({
 
       // `undefined` — вариант не найден, ничего не меняем.
       if (next === undefined) return;
+
+      // Выбор пути означает, что путь нужен: держать линию спрятанной после
+      // этого было бы издевательством над водителем, который её и выбирает.
+      setHidden(false);
+      setChosenIndex(index <= 0 ? 0 : index);
 
       /**
        * СНАЧАЛА ССЫЛКА, ПОТОМ ЗАПРОС, и это не перестраховка.
@@ -154,8 +210,16 @@ export function useOrderRoute({
       setAnchor(next);
       void refetch();
     },
-    [route, refetch],
+    [variants, refetch],
   );
 
-  return { route, chosen: anchor != null, choose };
+  return {
+    route,
+    variants,
+    chosenIndex,
+    chosen: anchor != null,
+    choose,
+    hidden,
+    setHidden,
+  };
 }

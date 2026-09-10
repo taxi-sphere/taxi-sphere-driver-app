@@ -755,7 +755,11 @@ export function OrderMap({
         onPanDrag={handleUserGesture}
         onRegionChangeComplete={handleRegionChangeComplete}
       >
-        {lineCoords.length >= 2 && (
+        {/* `hidden` гасит только ОТРИСОВКУ. Сама линия остаётся посчитанной:
+            на неё проецируется машина (иначе метка спрыгнет с дороги) и по
+            ней подгоняется масштаб. Водитель просил убрать линию с глаз, а не
+            выключить навигацию. */}
+        {!route.hidden && lineCoords.length >= 2 && (
           <>
             {/* Подложка светлее и шире — линия читается и на тёмной карте,
                 и поверх пёстрых кварталов. */}
@@ -916,12 +920,18 @@ export function OrderMap({
 
       {/* Выбор варианта пути (MOB-024). Показывается, только когда пути
           расходятся ощутимо: `hasRealChoice` отсеивает объезд одного двора,
-          ради которого отвлекать водителя за рулём не стоит. */}
-      {(hasRealChoice(route.route?.routes ?? []) || route.chosen) && (
+          ради которого отвлекать водителя за рулём не стоит. Варианты берём
+          из `route.variants`, а не из последнего ответа: после выбора роутер
+          отдаёт один путь, и список бы схлопнулся ровно тогда, когда им
+          пользуются. `route.hidden` держит кнопку на экране и без вариантов —
+          иначе вернуть скрытую линию было бы нечем. */}
+      {(hasRealChoice(route.variants) || route.chosen || route.hidden) && (
         <RouteChoiceBar
-          variants={route.route?.routes ?? []}
-          chosen={route.chosen}
+          variants={route.variants}
+          chosenIndex={route.chosenIndex}
+          hidden={route.hidden}
           onChoose={route.choose}
+          onHide={() => route.setHidden(true)}
           bottomInset={bottomInset}
         />
       )}
