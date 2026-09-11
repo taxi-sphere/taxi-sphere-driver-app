@@ -42,3 +42,9 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Рабочие файлы Claude Code и SpikeDB: состояние этой машины и токены,
+# в vcs им не место. В серверном репозитории по той же причине исключены
+# .claude/skills и .claude/hooks — но там закоммичены CLAUDE.md и правила,
+# здесь же ничего проектного в .claude нет.
+.claude/
