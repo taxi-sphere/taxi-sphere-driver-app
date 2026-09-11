@@ -23,7 +23,7 @@
  */
 
 import { useState, useMemo } from 'react';
-import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useEarnings } from '@/hooks/useEarnings';
@@ -97,7 +97,20 @@ export default function EarningsScreen() {
 
   const [period, setPeriod] = useState<Period>('today');
   const { dateFrom, dateTo } = useMemo(() => getDateRange(period), [period]);
-  const { data, isLoading, refetch, isRefetching } = useEarnings(dateFrom, dateTo);
+  /**
+   * `isPlaceholderData` — «на экране числа ПРОШЛОГО периода, новые в пути».
+   *
+   * До 1.5.58 этого состояния не существовало: данные обнулялись, и экран
+   * целиком подменялся скелетом вместе с переключателем периода. Теперь
+   * прежние числа остаются, но помечаются приглушением — иначе водитель
+   * прочитал бы заработок за сегодня под заголовком «неделя».
+   */
+  const { data, isLoading, isPlaceholderData, refetch, isRefetching } = useEarnings(
+    dateFrom,
+    dateTo,
+  );
+  /** Приглушение устаревших чисел — одним значением на все блоки сразу. */
+  const staleStyle = { opacity: isPlaceholderData ? 0.4 : 1 };
   const isNetworkOnline = useConnectionStore((s) => s.isNetworkOnline);
   const { data: profile } = useDriverProfile();
 
@@ -122,7 +135,7 @@ export default function EarningsScreen() {
         ]}
       />
 
-      <Surface level={1} padded={false} style={styles.stats}>
+      <Surface level={1} padded={false} style={[styles.stats, staleStyle]}>
         <Stat
           label="Заработок"
           value={formatCurrency(data?.period.totalEarnings ?? 0)}
@@ -147,7 +160,14 @@ export default function EarningsScreen() {
 
       {/* График показывается, только если сервер прислал разбивку по дням.
           Пустое место честнее выдуманных столбцов — см. EarningsChart. */}
-      {daily.length > 0 && <EarningsChart data={daily} title={`Заработок · ${PERIOD_LABELS[period].toLowerCase()}`} />}
+      {daily.length > 0 && (
+        <View style={staleStyle}>
+          <EarningsChart
+            data={daily}
+            title={`Заработок · ${PERIOD_LABELS[period].toLowerCase()}`}
+          />
+        </View>
+      )}
 
       <ScalePress
         onPress={() => router.push('/(main)/balance' as never)}
@@ -162,9 +182,23 @@ export default function EarningsScreen() {
         </Surface>
       </ScalePress>
 
-      <AppText variant="overline" tone="muted" style={styles.tripsTitle}>
-        Последние поездки
-      </AppText>
+      {/**
+       * Колесо стоит ЗДЕСЬ, а не поверх экрана: это единственное место, где
+       * видно, что идёт загрузка, и при этом остальным экраном можно
+       * пользоваться — переключить период обратно, уйти в другое меню.
+       */}
+      <View style={styles.tripsHeader}>
+        <AppText variant="overline" tone="muted">
+          Последние поездки
+        </AppText>
+        {isPlaceholderData && (
+          <ActivityIndicator
+            size="small"
+            color={colors.textMuted}
+            accessibilityLabel="Загружаются поездки за выбранный период"
+          />
+        )}
+      </View>
     </View>
   );
 
@@ -272,7 +306,15 @@ const createStyles = (_t: Theme) =>
     stat: { flex: 1, alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.xs },
     historyRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     historyLabel: { flex: 1 },
-    tripsTitle: { marginTop: spacing.sm },
+    tripsHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+      // Отступ переехал сюда с заголовка: в строке с выравниванием по центру
+      // `marginTop` у одного ребёнка сдвинул бы его относительно колеса.
+      marginTop: spacing.sm,
+    },
     trip: {
       flexDirection: 'row',
       alignItems: 'center',

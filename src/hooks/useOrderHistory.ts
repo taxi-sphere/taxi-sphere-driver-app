@@ -6,7 +6,7 @@
  * @created: 2026-09-09 (1.5.52)
  */
 
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
 import { fetchOrderHistory } from '@/api/history.api';
 import type { HistoryFilter } from '@/types/history';
 
@@ -27,5 +27,14 @@ export function useOrderHistory(filter: HistoryFilter = 'all') {
      * смену, сверяясь с расчётом.
      */
     staleTime: 60_000,
+    /**
+     * Фильтр входит в ключ, поэтому без этого переключение «Все → Отменённые»
+     * обнуляло ленту, и экран подменялся загрузчиком — вместе с самими
+     * кнопками фильтра. Нажал не туда — жди, нажать обратно нечем (1.5.58).
+     *
+     * Прежний список остаётся на месте, пока едет новый; экран помечает его
+     * устарелость через `isPlaceholderData`.
+     */
+    placeholderData: keepPreviousData,
   });
 }

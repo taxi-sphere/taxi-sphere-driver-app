@@ -65,6 +65,7 @@ export default function OrderHistoryScreen() {
     isLoading,
     isFetching,
     isFetchingNextPage,
+    isPlaceholderData,
     hasNextPage,
     fetchNextPage,
     refetch,
@@ -102,6 +103,22 @@ export default function OrderHistoryScreen() {
             </Pressable>
           );
         })}
+        {/**
+         * Колесо в ряду фильтров, а не вместо списка (1.5.58).
+         *
+         * До этого фильтр входил в ключ запроса без `placeholderData`, лента
+         * обнулялась, и на её месте оказывался загрузчик на весь экран.
+         * Теперь прежний список остаётся и приглушается, а колесо говорит,
+         * что новый уже едет: можно нажать другой фильтр или уйти с экрана,
+         * не дожидаясь.
+         */}
+        {isPlaceholderData && (
+          <ActivityIndicator
+            size="small"
+            color={colors.textMuted}
+            accessibilityLabel="Загружается выбранный список"
+          />
+        )}
       </View>
 
       {!isNetworkOnline && items.length === 0 ? (
@@ -120,6 +137,9 @@ export default function OrderHistoryScreen() {
         />
       ) : (
         <FlatList
+          // Приглушение — то же, что на экране денег: список на экране ещё
+          // от прошлого фильтра, и читать его как ответ нельзя.
+          style={{ opacity: isPlaceholderData ? 0.4 : 1 }}
           data={sections}
           keyExtractor={(s) => s.title}
           renderItem={({ item: section }) => (
@@ -402,6 +422,9 @@ const createStyles = (t: Theme) =>
   StyleSheet.create({
     filtersWrap: {
       flexDirection: 'row',
+      // Без этого колесо загрузки растянулось бы по высоте ряда: у строки
+      // с `flexDirection: row` выравнивание по умолчанию — `stretch`.
+      alignItems: 'center',
       gap: spacing.sm,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,

@@ -18,10 +18,13 @@
  *   было нечем — и она закрывала кусок карты у самой шторки. Теперь внизу
  *   справа стоит одна кнопка, а ряд раскрывается по нажатию.
  *
- *   ПОВТОРНОЕ НАЖАТИЕ НА АКТИВНУЮ КНОПКУ СВОРАЧИВАЕТ РЯД. Отдельного
- *   крестика нет намеренно: за рулём меньше целей — лучше, а «ткнуть ещё раз
- *   в то, что уже выбрано» — единственное нажатие, которому в этом ряду
- *   нечего было делать. Выбранный маршрут при этом остаётся.
+ *   РЯД ЗАКРЫВАЕТСЯ ДВУМЯ СПОСОБАМИ, И ОБА — ПРО ВОДИТЕЛЯ (1.5.58).
+ *   Повторным нажатием на ту кнопку, которую он сам только что нажал, и сам
+ *   собой через `ROUTE_PANEL_AUTOHIDE_MS`, если водитель выбрал путь и
+ *   поехал. Любое нажатие отсчёт сбрасывает, поэтому долгое сравнение путей
+ *   ряд не закроет. Решение о нажатии считает `@/lib/route-panel` — там же
+ *   объяснено, почему оно опирается на нажатия, а не на подсветку, и там же
+ *   тесты.
  *
  *   СВЁРНУТАЯ КНОПКА ГОВОРИТ СОСТОЯНИЕ. Если линия убрана, она пишет
  *   «Маршрут скрыт», а не «Маршруты»: иначе пустая карта читается как «не
@@ -30,10 +33,10 @@
  * @dependencies: @/lib/theme, @/components/ui, @/api/routing.api,
  *   @/lib/route-panel (что значит нажатие — там же и тесты)
  * @created: 2026-09-09 (1.5.49)
- * @updated: 2026-09-10 (1.5.57 — сворачивается, третий вариант «Без маршрута»)
+ * @updated: 2026-09-11 (1.5.58 — переключение больше не сворачивает ряд)
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { AppText } from '@/components/ui/Text';
 import { Surface } from '@/components/ui/Surface';
@@ -43,6 +46,8 @@ import type { RouteVariant } from '@/api/routing.api';
 import {
   isRoutePanelTargetActive,
   routePanelAction,
+  routePanelKey,
+  ROUTE_PANEL_AUTOHIDE_MS,
   type RoutePanelTarget,
 } from '@/lib/route-panel';
 
@@ -92,11 +97,53 @@ export function RouteChoiceBar({
   const styles = useThemedStyles(createStyles);
   const [open, setOpen] = useState(false);
 
+  /**
+   * Что водитель нажал сам с момента раскрытия ряда.
+   *
+   * Сбрасывается при каждом открытии: «повторное нажатие» считается внутри
+   * одного раскрытия, иначе кнопка, нажатая десять минут назад, свернула бы
+   * ряд сразу после следующего открытия.
+   */
+  const [lastTapped, setLastTapped] = useState<string | null>(null);
+
+  const openPanel = useCallback(() => {
+    setLastTapped(null);
+    setOpen(true);
+  }, []);
+
+  const handleTap = useCallback(
+    (target: RoutePanelTarget) => {
+      const action = routePanelAction(target, lastTapped);
+      if (action === 'collapse') {
+        setOpen(false);
+        return;
+      }
+      // Запоминаем ДО действия: `onChoose` перестраивает маршрут, и к тому
+      // моменту, как ответ придёт, нажатие должно быть уже учтено.
+      setLastTapped(routePanelKey(target));
+      if (action === 'hide') onHide();
+      else if (target.kind === 'variant') onChoose(target.index);
+    },
+    [lastTapped, onChoose, onHide],
+  );
+
+  /**
+   * Спрятать ряд, если водитель перестал им пользоваться.
+   *
+   * Зависимость от `lastTapped` — это и есть сброс отсчёта: каждое нажатие
+   * меняет значение, эффект перезапускается, таймер начинается заново.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => setOpen(false), ROUTE_PANEL_AUTOHIDE_MS);
+    return () => clearTimeout(timer);
+  }, [open, lastTapped]);
+
   if (!open) {
     return (
       <View style={[styles.wrap, { bottom: bottomInset + spacing.md }]}>
         <Pressable
-          onPress={() => setOpen(true)}
+          onPress={openPanel}
           accessibilityRole="button"
           accessibilityLabel={hidden ? 'Маршрут скрыт, открыть выбор' : 'Варианты маршрута'}
           style={({ pressed }) => [styles.collapsed, { opacity: pressed ? 0.7 : 1 }]}
@@ -119,21 +166,16 @@ export function RouteChoiceBar({
         {shown.map((variant, index) => {
           const target: RoutePanelTarget = { kind: 'variant', index };
           const active = isRoutePanelTargetActive(target, { chosenIndex, hidden });
+          const collapses = routePanelAction(target, lastTapped) === 'collapse';
           return (
             <Pressable
               key={index}
-              // Что значит нажатие — решает `routePanelAction`: правило одно
-              // на все три кнопки и покрыто тестами (`@/lib/route-panel`).
-              onPress={() =>
-                routePanelAction(target, { chosenIndex, hidden }) === 'collapse'
-                  ? setOpen(false)
-                  : onChoose(index)
-              }
+              onPress={() => handleTap(target)}
               accessibilityRole="button"
               accessibilityState={{ selected: active }}
               accessibilityLabel={
-                active
-                  ? `Выбрано: ${variantLabel(variant)}. Нажмите, чтобы свернуть`
+                collapses
+                  ? `${variantLabel(variant)}. Нажмите, чтобы свернуть`
                   : `Вариант пути: ${variantLabel(variant)}`
               }
               style={({ pressed }) => [styles.item, { opacity: pressed ? 0.7 : 1 }]}
@@ -170,15 +212,13 @@ export function RouteChoiceBar({
         })}
 
         <Pressable
-          onPress={() =>
-            routePanelAction({ kind: 'noRoute' }, { chosenIndex, hidden }) === 'collapse'
-              ? setOpen(false)
-              : onHide()
-          }
+          onPress={() => handleTap({ kind: 'noRoute' })}
           accessibilityRole="button"
           accessibilityState={{ selected: hidden }}
           accessibilityLabel={
-            hidden ? 'Маршрут скрыт. Нажмите, чтобы свернуть' : 'Убрать маршрут с карты'
+            routePanelAction({ kind: 'noRoute' }, lastTapped) === 'collapse'
+              ? 'Маршрут скрыт. Нажмите, чтобы свернуть'
+              : 'Убрать маршрут с карты'
           }
           style={({ pressed }) => [styles.noRoute, { opacity: pressed ? 0.7 : 1 }]}
         >
