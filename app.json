@@ -2,7 +2,7 @@
   "expo": {
     "name": "Taxi Sphere Водитель",
     "slug": "taxi-sphere-driver-app",
-    "version": "1.5.59",
+    "version": "1.5.60",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",

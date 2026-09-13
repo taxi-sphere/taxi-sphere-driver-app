@@ -145,6 +145,11 @@ const availableOrdersMetaSchema = z.object({
    */
   blockedReason: z.string().nullish(),
   blockedMessage: z.string().nullish(),
+  /**
+   * Сервер v1.100.14: за сколько минут до подачи предзаказ считается
+   * текущим — та же цифра, по которой сервер начинает его раздавать.
+   */
+  preorderLeadMin: z.number().optional(),
 });
 
 export const availableOrdersResponseSchema = z.object({

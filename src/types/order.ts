@@ -197,6 +197,11 @@ export interface AvailableOrdersMeta {
    */
   blockedReason?: string | null;
   blockedMessage?: string | null;
+  /**
+   * За сколько минут до подачи предзаказ считается текущим (сервер
+   * v1.100.14). Нет — сервер старше; см. `@/lib/preorder-timing`.
+   */
+  preorderLeadMin?: number;
 }
 
 /**

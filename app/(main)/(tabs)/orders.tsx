@@ -19,7 +19,7 @@
  * @dependencies: useAvailableOrders, useScheduledOrders, useOrderActions,
  *                @/components/order/OrderCard, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-13 (1.5.59 — окно «взять» уступает окну предложения)
+ * @updated: 2026-09-13 (1.5.60 — подошедший предзаказ в «Сейчас»)
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -32,6 +32,7 @@ import { activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useConnectionStore } from '@/stores/connection.store';
 import { useOfferStore } from '@/stores/offer.store';
+import { isOrderCurrent } from '@/lib/preorder-timing';
 import { socketService } from '@/services/socket.service';
 import { getOrderEtaEstimate } from '@/api/orders.api';
 import { IncomingOrderModal } from '@/components/IncomingOrderModal';
@@ -63,6 +64,9 @@ type OrderKind = 'all' | 'now' | 'scheduled';
 
 const ACCEPT_TIMER_SEC = 30;
 const DEFAULT_ETA_MIN = 5;
+
+/** Как часто пересчитывать «Сейчас / Предзаказы» без новых данных. */
+const KIND_CLOCK_MS = 30_000;
 
 /** Через сколько секунд пробовать переподключиться после обрыва. */
 const RETRY_INTERVAL = 15;
@@ -206,25 +210,45 @@ export default function OrdersScreen() {
    */
   const [orderKind, setOrderKind] = useState<OrderKind>('all');
 
+  /**
+   * Часы для деления «Сейчас / Предзаказы» (1.5.60).
+   *
+   * Предзаказ переходит в «Сейчас» по времени, а не по приходу данных:
+   * список может не меняться минутами, и React Query отдаёт тот же массив —
+   * без своих часов заказ застрял бы в «Предзаказах».
+   */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), KIND_CLOCK_MS);
+    return () => clearInterval(timer);
+  }, []);
+
+  /**
+   * Текущий ли заказ (1.5.60). Раньше «Сейчас» значило «нет времени
+   * подачи», и предзаказ на 14:00 висел в «Предзаказах» даже в 14:10, хотя
+   * сервер раздавал его с 13:25. Теперь — по цифре из стратегии сервера.
+   */
+  const preorderLeadMin = meta?.preorderLeadMin;
+  const isCurrent = useCallback(
+    (order: AvailableOrder) => isOrderCurrent(order.scheduledAt, preorderLeadMin, now),
+    [preorderLeadMin, now],
+  );
+
   // Через `useMemo`, а не `orders ?? []` прямо в теле: пустой литерал
   // рождается заново на каждый рендер и пересчитывал бы всё, что от него
   // зависит, — включая счётчики на кнопках фильтра.
   const all = useMemo(() => orders ?? [], [orders]);
   const list = useMemo(() => {
-    if (orderKind === 'now') return all.filter((o) => !o.scheduledAt);
-    if (orderKind === 'scheduled') return all.filter((o) => o.scheduledAt);
+    if (orderKind === 'now') return all.filter(isCurrent);
+    if (orderKind === 'scheduled') return all.filter((o) => !isCurrent(o));
     return all;
-  }, [all, orderKind]);
+  }, [all, orderKind, isCurrent]);
 
   /** Сколько заказов каждого рода — числа на кнопках фильтра. */
-  const counts = useMemo(
-    () => ({
-      all: all.length,
-      now: all.filter((o) => !o.scheduledAt).length,
-      scheduled: all.filter((o) => o.scheduledAt).length,
-    }),
-    [all],
-  );
+  const counts = useMemo(() => {
+    const current = all.filter(isCurrent).length;
+    return { all: all.length, now: current, scheduled: all.length - current };
+  }, [all, isCurrent]);
 
   const listLoading = isLoading;
   const listError = error;

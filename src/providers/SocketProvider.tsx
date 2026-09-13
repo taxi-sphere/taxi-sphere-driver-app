@@ -8,7 +8,7 @@
  * @dependencies: socket.service, auth.store, offer.store, token.service,
  *                @tanstack/react-query
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-13 (1.5.59 — не звенеть о заказе, который уже предложен окном)
+ * @updated: 2026-09-13 (1.5.60 — подошедший предзаказ звучит как текущий)
  */
 
 import { useEffect, useRef } from 'react';
@@ -17,6 +17,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth.store';
 import { useChatStore } from '@/stores/chat.store';
 import { useOfferStore } from '@/stores/offer.store';
+import { isOrderCurrent } from '@/lib/preorder-timing';
 import { socketService } from '@/services/socket.service';
 import { showLocalNotification } from '@/services/notification.service';
 import { playSound } from '@/services/sound.service';
@@ -176,7 +177,13 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           // себя занятым) — список ему всё равно показывают, но звонить
           // о том, чего нельзя взять, незачем.
           if (cached?.meta?.blockedReason) break;
-          void playSound(hit.scheduledAt ? 'order-available-scheduled' : 'order-available');
+          // Подошедший предзаказ звучит как заказ на сейчас (1.5.60): сервер
+          // уже раздаёт его, и смотреть в экран надо немедленно.
+          void playSound(
+            isOrderCurrent(hit.scheduledAt, cached?.meta?.preorderLeadMin, Date.now())
+              ? 'order-available'
+              : 'order-available-scheduled',
+          );
           break;
         }
       })();
