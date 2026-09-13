@@ -57,12 +57,20 @@
  *   за край. Метка возвращается ровно тогда, когда водитель забрал карту
  *   себе, — и тогда ей и положено уходить за экран.
  *
+ *   СТРЕЛКА С ПАМЯТЬЮ (1.5.62). Где машина и куда она смотрит, решает
+ *   `@/lib/arrow-tracker`: неточные фиксы отсеиваются, место на маршруте
+ *   ищется рядом с прошлым, уход на другой кусок маршрута или с маршрута —
+ *   только по трём фиксам подряд. Раньше этот выбор жил здесь и начинался с
+ *   чистого листа на каждом фиксе — отсюда жалоба «едет прямо, а карта
+ *   переворачивается назад» (13.09.2026). Резкий разворот на ходу пишется
+ *   в журнал приложения вместе с последними фиксами.
+ *
  * @dependencies: react-native-maps, react-native-svg, expo-location, expo-router,
- *   @/lib/theme, @/hooks/useOrderRoute, @/lib/map-fit, @/lib/heading,
+ *   @/lib/theme, @/hooks/useOrderRoute, @/lib/map-fit, @/lib/arrow-tracker,
  *   @/lib/route-snap, @/lib/map-orientation, @/lib/map-follow,
- *   @/stores/settings.store
+ *   @/stores/settings.store, @/services/logger.service
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-09 (1.5.51 — стрелка не разворачивается на шуме, настройка слежения)
+ * @updated: 2026-09-13 (1.5.62 — стрелка с памятью и журнал разворотов)
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -81,15 +89,14 @@ import { hasRealChoice } from '@/lib/route-choice';
 import { RouteChoiceBar } from '@/components/map/RouteChoiceBar';
 import { mapFitKey } from '@/lib/map-fit';
 import {
-  bearingDegrees,
-  distanceMeters,
-  headingAlong,
-  isSnapBearingSane,
-  limitTurn,
-  MIN_SPAN_M,
-  MIN_SPEED_MPS,
-} from '@/lib/heading';
-import { routeAhead, snapToRoute } from '@/lib/route-snap';
+  createTracker,
+  routeOrigin,
+  trackFix,
+  trackRoute,
+  type TrackerOutput,
+} from '@/lib/arrow-tracker';
+import { routeAhead } from '@/lib/route-snap';
+import { driverLogger } from '@/services/logger.service';
 import { screenHeading, shouldTurnCamera, targetCameraHeading } from '@/lib/map-orientation';
 import {
   blendInterval,
@@ -245,16 +252,19 @@ export function OrderMap({
   }, []);
 
   /**
-   * Куда водитель едет — по его собственному перемещению.
+   * Стрелка «с памятью» (1.5.62): где рисовать машину и куда она смотрит.
    *
-   * `null`, пока машина не проехала `MIN_SPAN_M`: до этого угол между двумя
-   * фиксами — это шум приёмника, а не поворот. Раз посчитанный, угол больше
-   * не сбрасывается — стоящая машина смотрит туда же, куда ехала, как в
-   * любом навигаторе.
+   * Состояние — в ref, а не в state: оно меняется на каждом фиксе и нужно
+   * только следующему фиксу. Перерисовку запускает `track` — то, что видно
+   * на карте. Все правила и контрольный опыт — в `@/lib/arrow-tracker`.
    */
-  const [movementHeading, setMovementHeading] = useState<number | null>(null);
-  /** Точка, от которой отсчитывается следующий угол. */
-  const headingAnchorRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const trackerRef = useRef(createTracker());
+  const [track, setTrack] = useState<TrackerOutput | null>(null);
+  /** Линия маршрута для обработчика фиксов: подписка создаётся один раз. */
+  const routeRef = useRef<readonly { latitude: number; longitude: number }[]>(NO_ROUTE);
+  /** Заказ — для записи разворота стрелки в журнал. */
+  const orderIdRef = useRef(order.id);
+  orderIdRef.current = order.id;
 
   /**
    * Отслеживание позиции водителя — ТОЛЬКО пока экран заказа открыт.
@@ -298,40 +308,37 @@ export function OrderMap({
             }
             lastFixAtRef.current = now;
 
-            // Курс считаем по пройденному отрезку, а НЕ берём `loc.coords.heading`:
-            // на серверной записи трека этот курс принимал два различных значения
-            // на 356 точек — приёмник его на городских скоростях просто не считает
-            // (тот же урок, что в админке, v1.99.84).
-            /**
-             * ПОРОГ СКОРОСТИ, А НЕ ТОЛЬКО РАССТОЯНИЯ (1.5.51).
-             *
-             * Стоящая машина всё равно «ползёт» по координатам: приёмник
-             * шумит, и за минуту на светофоре набегает больше пятнадцати
-             * метров случайного блуждания — расстояние наберётся, а
-             * направление у него будет произвольное. Так стрелка и
-             * разворачивалась на 180° у машины, едущей прямо.
-             *
-             * `speed` в expo-location — метры в секунду; `-1` или
-             * `undefined` означает «приёмник не знает», и тогда решает
-             * только расстояние, как раньше.
-             */
-            const speed = loc.coords.speed;
-            const movingFast = speed == null || speed < 0 || speed >= MIN_SPEED_MPS;
+            // Решает стрелка «с памятью» (`@/lib/arrow-tracker`): отсев
+            // неточных фиксов, место на маршруте, курс. Время — СЪЁМКИ
+            // (`loc.timestamp`): только по нему виден фикс, пришедший позже
+            // более свежего. Курс приёмника (`loc.coords.heading`) не берём —
+            // на городских скоростях он не считается (урок v1.99.84).
+            const step = trackFix(
+              trackerRef.current,
+              {
+                latitude: next.latitude,
+                longitude: next.longitude,
+                accuracy: loc.coords.accuracy ?? null,
+                speed: loc.coords.speed ?? null,
+                timestamp: loc.timestamp,
+              },
+              routeRef.current,
+            );
+            trackerRef.current = step.state;
+            setTrack(step.state.output);
 
-            const anchor = headingAnchorRef.current;
-            if (!anchor) {
-              headingAnchorRef.current = next;
-            } else if (movingFast && distanceMeters(anchor, next) >= MIN_SPAN_M) {
-              // Резкие скачки сглаживаем: машина не разворачивается за секунду.
-              setMovementHeading((prev) => limitTurn(prev, bearingDegrees(anchor, next)));
-              headingAnchorRef.current = next;
-            } else if (!movingFast) {
-              // Машина стоит — начинаем отсчёт заново с текущей точки, иначе
-              // накопленное за стоянку блуждание сойдёт за поездку.
-              headingAnchorRef.current = next;
+            if (step.reversal) {
+              driverLogger.warn('Стрелка развернулась на ходу', {
+                screen: 'order-map',
+                action: 'arrow_reversal',
+                extra: { orderId: orderIdRef.current, ...step.reversal },
+              });
             }
 
-            setDriverLocation(next);
+            // Маршрут запрашивается только по принятым фиксам и от места
+            // машины НА маршруте, пока она на нём: иначе выброс, прошедший
+            // отсев, стал бы началом новой линии. Правило — `routeOrigin`.
+            if (step.verdict === 'accepted') setDriverLocation(routeOrigin(step.state) ?? next);
           },
         );
 
@@ -357,52 +364,40 @@ export function OrderMap({
     status: order.status,
     lat: driverLocation?.latitude,
     lng: driverLocation?.longitude,
+    // Курс для начала маршрута — только измеренный: дорога под машиной или
+    // движение. Догадка по началу прежней линии роутеру не подсказка.
+    heading:
+      track?.source === 'route' || track?.source === 'movement' ? track.heading : null,
   });
   // С 1.5.49 хук отдаёт не только линию, но и выбор варианта пути:
   // `route.route` — то, что рисуем, остальное — управление выбором.
   const routeCoords = route.route?.coordinates ?? NO_ROUTE;
+  routeRef.current = routeCoords;
 
   /**
-   * Машина на дороге, а не там, куда её положил приёмник.
+   * Новая линия — новое место машины на ней, не дожидаясь фикса.
    *
-   * Проекция на маршрут делает сразу две вещи, которых по отдельности не
-   * добиться: ставит стрелку на дорогу и даёт ей курс этого куска дороги.
-   * Дальше `MAX_SNAP_M` от линии проекции нет — водитель действительно
-   * съехал с маршрута, и показывать его на ней было бы враньём.
+   * Линия перестраивается каждые 60–110 метров, и прежнее место к ней не
+   * относится: индекс отрезка в новой геометрии значит другое, и до
+   * следующего фикса линия обрезалась бы по чужому индексу.
    */
-  const snap = useMemo(
-    () => (driverLocation ? snapToRoute(driverLocation, routeCoords) : null),
-    [driverLocation, routeCoords],
-  );
-  const driverPoint = snap?.point ?? driverLocation;
+  useEffect(() => {
+    const next = trackRoute(trackerRef.current, routeCoords);
+    if (next === trackerRef.current) return;
+    trackerRef.current = next;
+    setTrack(next.output);
+  }, [routeCoords]);
+
+  /**
+   * Машина на дороге, а не там, куда её положил приёмник, и её курс — из
+   * `@/lib/arrow-tracker`. До 1.5.62 здесь каждый фикс проецировался на
+   * ближайший кусок ВСЕГО маршрута без памяти — отсюда развороты назад и
+   * прыжки на соседний кусок; разбор и контрольный опыт — в шапке модуля.
+   * Курс `null` — рисуется точка без направления, а не стрелка наугад.
+   */
+  const driverPoint = track?.point ?? null;
   driverPointRef.current = driverPoint;
-
-  /**
-   * Куда развернуть стрелку водителя.
-   *
-   * Порядок источников не случаен. Отрезок дороги под машиной — самый
-   * устойчивый: он не дрожит от шума приёмника и не пропадает, когда машина
-   * стоит. Съехал с маршрута — остаётся собственное перемещение, это факт, а
-   * не план. Не тронулся ни разу — первый отрезок линии маршрута: он
-   * построен по дорогам от водителя и показывает, куда ехать. Нет ничего —
-   * `null`, и рисуется точка без направления, а не стрелка наугад на север.
-   */
-  /**
-   * ПРОЕКЦИЯ НА МАРШРУТ — ХОРОШИЙ ИСТОЧНИК КУРСА, НО НЕ БЕЗУСЛОВНЫЙ.
-   *
-   * Она даёт курс того куска дороги, к которому машина оказалась ближе
-   * всего, — а на двусторонней улице, на развязке и на устаревшей линии
-   * этот кусок бывает ВСТРЕЧНЫМ. Тогда стрелка честно показывает назад,
-   * пока водитель едет вперёд (жалоба владельца 09.09.2026).
-   *
-   * Собственное перемещение так не врёт: оно измерено, а не выбрано. Если
-   * проекция расходится с ним больше чем на 120°, верим перемещению.
-   */
-  const snapBearing =
-    snap?.bearing != null && isSnapBearingSane(snap.bearing, movementHeading)
-      ? snap.bearing
-      : null;
-  const driverHeading = snapBearing ?? movementHeading ?? headingAlong(routeCoords);
+  const driverHeading = track?.heading ?? null;
   // Курс нужен эффекту смены режима, но не должен его запускать: иначе он
   // стал бы вторым хозяином камеры и оборвал бы анимацию слежения.
   const driverHeadingRef = useRef(driverHeading);
@@ -412,9 +407,13 @@ export function OrderMap({
    * Линия рисуется ОТ машины вперёд: пройденный хвост навигатор не
    * показывает, а главное — так линия начинается ровно под стрелкой, а не
    * висит рядом с ней. Охвату (`fitAll`) отдаётся полный маршрут: «показать
-   * весь маршрут» должно показывать весь.
+   * весь маршрут» должно показывать весь. Место машины берётся, только если
+   * оно посчитано для ЭТОЙ линии.
    */
-  const lineCoords = useMemo(() => routeAhead(routeCoords, snap), [routeCoords, snap]);
+  const lineCoords = useMemo(
+    () => routeAhead(routeCoords, track?.route === routeCoords ? track.snap : null),
+    [routeCoords, track],
+  );
 
   /**
    * Куда сейчас повёрнута камера. Ведём сами, а не спрашиваем карту:

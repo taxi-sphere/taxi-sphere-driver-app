@@ -14,6 +14,7 @@
  *
  * @dependencies: api/client, services/logger.service
  * @created: 2026-09-04 (1.5.36)
+ * @updated: 2026-09-13 (1.5.62 — курс машины в начале маршрута)
  */
 
 import { z } from 'zod';
@@ -77,6 +78,12 @@ export async function getOrderRoute(input: {
    * неё — так выбор переживает пересчёт линии каждые 60-110 метров.
    */
   via?: { lat: number; lng: number } | null;
+  /**
+   * Куда машина едет, градусы от севера (1.5.62). Сервер v1.100.16+ начинает
+   * маршрут с дороги в эту сторону, а не с ближайшей — встречной или
+   * соседней. Сервер старше поле молча отбрасывает.
+   */
+  heading?: number | null;
 }): Promise<OrderRoute | null> {
   const res = await apiPost('driver/routing', input);
   const parsed = routeResponseSchema.safeParse(res);

@@ -21,16 +21,24 @@
  *   маршруте» и рисуется как есть; маршрут всё равно перестроится, он
  *   запрашивается от позиции водителя.
  *
+ *   ЧТО ЗДЕСЬ НЕ РЕШАЕТСЯ (1.5.62). `snapToRoute` выбирает ближайший кусок
+ *   во ВСЁМ маршруте и ничего не помнит — на маршруте, который проходит
+ *   рядом сам с собой (объезд квартала, разворот), стрелка от этого
+ *   перескакивала на другой кусок. Выбор с памятью живёт в
+ *   `@/lib/arrow-tracker`; отсюда он берёт геометрию: всех кандидатов рядом
+ *   с точкой (`routeCandidates`), расстояние по маршруту (`routeDistances`) и
+ *   точку на заданном расстоянии (`pointAlong`).
+ *
  *   Геометрия здесь плоская: на длине одного отрезка маршрута (десятки
  *   метров) кривизна Земли не видна, а расстояния всё равно считает
  *   `distanceMeters` по формуле гаверсинуса.
  *
  * @dependencies: @/lib/heading
  * @created: 2026-09-07 (1.5.39)
- * @updated: 2026-09-09 (1.5.51 — линия маршрута не исчезает на последнем узле)
+ * @updated: 2026-09-13 (1.5.62 — кандидаты, расстояние по маршруту, точка на маршруте)
  */
 
-import { bearingDegrees, type HeadingPoint } from '@/lib/heading';
+import { bearingDegrees, distanceMeters, type HeadingPoint } from '@/lib/heading';
 
 /** Радиус Земли, метры — тот же, что в `@/lib/heading`. */
 const EARTH_RADIUS_M = 6_371_008.8;
@@ -58,6 +66,20 @@ export interface RouteSnap {
   bearing: number;
   /** Насколько сырая точка отстояла от линии, метры. */
   distanceM: number;
+}
+
+/** Кусок маршрута рядом с точкой — кандидат на то, где машина. */
+export interface RouteCandidate {
+  /** Индекс начала отрезка. */
+  index: number;
+  /** Проекция точки на этот отрезок. */
+  point: HeadingPoint;
+  /** Расстояние от точки до отрезка, метры. */
+  distanceM: number;
+  /** Сколько метров по маршруту от его начала до проекции. */
+  alongM: number;
+  /** Куда ведёт маршрут от проекции; `null` — впереди нет ни одной отличной точки. */
+  bearing: number | null;
 }
 
 /** Метры на градус долготы и широты возле заданной точки. */
@@ -119,8 +141,8 @@ export function projectOnSegment(
  * от начала отрезка, стрелка на повороте показывала бы туда, откуда
  * приехали, пока проекция не переползёт на новый отрезок.
  */
-function bearingFrom(
-  route: HeadingPoint[],
+export function bearingAhead(
+  route: readonly HeadingPoint[],
   index: number,
   origin: HeadingPoint,
 ): number | null {
@@ -138,35 +160,118 @@ function bearingFrom(
 }
 
 /**
- * Притянуть позицию водителя к маршруту.
+ * Расстояние по маршруту от его начала до каждой вершины, метры.
+ *
+ * Запоминается на сам массив: линия приходит с сервера раз в 60–110 метров
+ * пути, а спрашивают её на каждом фиксе. Ключ — ссылка, а не содержимое:
+ * react-query отдаёт один и тот же массив, пока маршрут не перестроен, и
+ * `WeakMap` сам забывает старые линии.
+ */
+const distancesCache = new WeakMap<readonly HeadingPoint[], number[]>();
+
+export function routeDistances(route: readonly HeadingPoint[]): number[] {
+  const cached = distancesCache.get(route);
+  if (cached) return cached;
+
+  const distances: number[] = [];
+  let total = 0;
+  for (let i = 0; i < route.length; i += 1) {
+    if (i > 0) total += distanceMeters(route[i - 1], route[i]);
+    distances.push(total);
+  }
+
+  distancesCache.set(route, distances);
+  return distances;
+}
+
+/**
+ * Все куски маршрута не дальше `maxDistanceM` от точки — по одному на отрезок,
+ * в порядке маршрута.
+ *
+ * Выбор между ними — не здесь: ближайший не всегда правильный (обратная нога
+ * разворота бывает ближе прямой), и решает это тот, кто помнит, где машина
+ * была секунду назад (`@/lib/arrow-tracker`).
+ */
+export function routeCandidates(
+  point: HeadingPoint,
+  route: readonly HeadingPoint[],
+  maxDistanceM: number = MAX_SNAP_M,
+): RouteCandidate[] {
+  if (route.length < 2) return [];
+
+  const distances = routeDistances(route);
+  const candidates: RouteCandidate[] = [];
+
+  for (let i = 0; i < route.length - 1; i += 1) {
+    const projection = projectOnSegment(point, route[i], route[i + 1]);
+    if (projection.distanceM > maxDistanceM) continue;
+
+    candidates.push({
+      index: i,
+      point: projection.point,
+      distanceM: projection.distanceM,
+      alongM: distances[i] + distanceMeters(route[i], projection.point),
+      bearing: bearingAhead(route, i, projection.point),
+    });
+  }
+
+  return candidates;
+}
+
+/**
+ * Точка на маршруте в `alongM` метрах от его начала.
+ *
+ * Расстояние зажимается в длину маршрута: стрелка, которая едет по маршруту
+ * сама (фикс отсеян), не должна уехать за его конец. `null` — линии нет.
+ */
+export function pointAlong(
+  route: readonly HeadingPoint[],
+  alongM: number,
+): { point: HeadingPoint; index: number } | null {
+  if (route.length < 2) return null;
+
+  const distances = routeDistances(route);
+  const target = Math.max(0, Math.min(distances[distances.length - 1], alongM));
+
+  for (let i = 0; i < route.length - 1; i += 1) {
+    if (target > distances[i + 1] && i < route.length - 2) continue;
+
+    const length = distances[i + 1] - distances[i];
+    const t = length > 0 ? (target - distances[i]) / length : 0;
+    return {
+      index: i,
+      point: {
+        latitude: route[i].latitude + (route[i + 1].latitude - route[i].latitude) * t,
+        longitude: route[i].longitude + (route[i + 1].longitude - route[i].longitude) * t,
+      },
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Притянуть позицию водителя к ближайшему куску маршрута.
  *
  * `null`, если маршрута нет или водитель от него дальше `maxDistanceM` —
  * вызывающий рисует сырую точку и честно показывает, что машина в стороне.
+ * Карта с 1.5.62 берёт место машины из `@/lib/arrow-tracker`, где выбор
+ * между кусками учитывает прошлое положение.
  */
 export function snapToRoute(
   point: HeadingPoint,
   route: HeadingPoint[],
   maxDistanceM: number = MAX_SNAP_M,
 ): RouteSnap | null {
-  if (route.length < 2) return null;
+  let best: RouteCandidate | null = null;
 
-  let bestIndex = -1;
-  let best: Projection | null = null;
-
-  for (let i = 0; i < route.length - 1; i += 1) {
-    const projection = projectOnSegment(point, route[i], route[i + 1]);
-    if (!best || projection.distanceM < best.distanceM) {
-      best = projection;
-      bestIndex = i;
-    }
+  for (const candidate of routeCandidates(point, route, maxDistanceM)) {
+    if (!best || candidate.distanceM < best.distanceM) best = candidate;
   }
 
-  if (!best || best.distanceM > maxDistanceM) return null;
+  if (!best || best.bearing == null) return null;
 
-  const bearing = bearingFrom(route, bestIndex, best.point);
-  if (bearing == null) return null;
-
-  return { point: best.point, index: bestIndex, bearing, distanceM: best.distanceM };
+  return { point: best.point, index: best.index, bearing: best.bearing, distanceM: best.distanceM };
 }
 
 /**
@@ -177,7 +282,10 @@ export function snapToRoute(
  * не ведёт. Пройденный хвост отрезается, а первой точкой становится сама
  * проекция.
  */
-export function routeAhead(route: HeadingPoint[], snap: RouteSnap | null): HeadingPoint[] {
+export function routeAhead(
+  route: HeadingPoint[],
+  snap: Pick<RouteSnap, 'point' | 'index'> | null,
+): HeadingPoint[] {
   if (!snap || route.length < 2) return route;
 
   const ahead = [snap.point, ...route.slice(snap.index + 1)];

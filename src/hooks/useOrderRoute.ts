@@ -12,7 +12,7 @@
  * @dependencies: react-query, @/api/routing.api, @/lib/order-route-key,
  *   @/lib/route-choice
  * @created: 2026-09-04 (1.5.36)
- * @updated: 2026-09-10 (1.5.57 — варианты запоминаются, линию можно скрыть)
+ * @updated: 2026-09-13 (1.5.62 — курс машины уходит в запрос маршрута)
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -30,6 +30,8 @@ interface UseOrderRouteParams {
   status: string | null | undefined;
   lat: number | null | undefined;
   lng: number | null | undefined;
+  /** Куда машина едет, градусы; уходит в запрос, но не в ключ (1.5.62). */
+  heading?: number | null;
 }
 
 export interface OrderRouteState {
@@ -64,8 +66,19 @@ export function useOrderRoute({
   status,
   lat,
   lng,
+  heading,
 }: UseOrderRouteParams): OrderRouteState {
   const enabled = Boolean(orderId) && lat != null && lng != null;
+
+  /**
+   * Куда машина едет — для начала маршрута (1.5.62).
+   *
+   * НЕ в ключе запроса, по той же причине, что опорная точка: курс меняется
+   * на каждом повороте и в ключе перестраивал бы маршрут на каждом
+   * перекрёстке. Уходит тот, что есть в момент запроса.
+   */
+  const headingRef = useRef<number | null>(null);
+  headingRef.current = heading ?? null;
 
   /**
    * Опорная точка выбранного пути.
@@ -118,6 +131,7 @@ export function useOrderRoute({
               lng: anchorRef.current.longitude,
             }
           : null,
+        heading: headingRef.current,
       }),
     enabled,
     staleTime: 60_000,
