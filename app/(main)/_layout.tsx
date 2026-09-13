@@ -172,6 +172,15 @@ function MainStack() {
           headerTitle: 'Диспетчер',
         }}
       />
+      {/* Смена адреса в поездке (1.5.61). Заголовок с подписью точки
+        * задаёт сам экран. */}
+      <Stack.Screen
+        name="change-address"
+        options={{
+          headerShown: true,
+          headerTitle: 'Новый адрес',
+        }}
+      />
       <Stack.Screen
         name="news/index"
         options={{

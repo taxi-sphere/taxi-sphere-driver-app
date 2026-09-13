@@ -45,8 +45,8 @@
  * @dependencies: useActiveOrders, useOrderActions, @/components/ui,
  *                @/components/order/*, @/components/map/OrderMap
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-04 (1.5.34 — подъезд обычным текстом «под. N» внутри адреса,
- *                        примечание к адресу в шапке, чипы без номеров)
+ * @updated: 2026-09-13 (1.5.61 — третья кнопка «Сменить адрес»: клиент в машине
+ *                        назвал другую точку; ссылки навигаторов в navigator-url)
  */
 
 import {
@@ -96,6 +96,8 @@ import {
   splitAddressEntrance,
 } from '@/lib/utils';
 import { isEmbeddedMapAvailable, EMBEDDED_MAP_UNAVAILABLE_HINT } from '@/lib/map-availability';
+import { openInNavigator } from '@/lib/open-navigator';
+import { editableRoutePoints, routePointKey } from '@/lib/route-edit';
 import {
   icon as iconTokens,
   radius,
@@ -403,20 +405,10 @@ export default function CurrentOrderScreen() {
     }
   }, [router]);
 
+  // Ссылки навигаторов — в `navigator-url` (1.5.61): ими же пользуется экран
+  // смены адреса.
   const openNavigator = useCallback(
-    (lat: number, lng: number) => {
-      haptics.tap();
-      const urls: Record<string, string> = {
-        yandex: `yandexnavi://build_route_on_map?lat_to=${lat}&lon_to=${lng}`,
-        '2gis': `dgis://2gis.ru/routeSearch/rsType/car/to/${lng},${lat}`,
-        google: `google.navigation:q=${lat},${lng}`,
-      };
-      const url = urls[preferredNavigator] ?? urls.yandex;
-      Linking.openURL(url).catch(() => {
-        // Фолбэк на Google Maps web
-        Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
-      });
-    },
+    (lat: number, lng: number) => openInNavigator(preferredNavigator, lat, lng),
     [preferredNavigator],
   );
 
@@ -615,6 +607,62 @@ export default function CurrentOrderScreen() {
       if (ok) run();
     });
   }, [order, arrive, start, complete, runOrderAction, confirm, handleStopReached]);
+
+  /**
+   * Смена адреса в поездке (1.5.61): клиент назвал другую точку.
+   *
+   * Кнопка есть всегда, но до посадки клиента тусклая — решение владельца
+   * 13.09.2026. Тусклая, а не мёртвая: нажатие объясняет, почему нельзя.
+   * Кнопка, которая молча не нажимается, выглядит сломанной, и её жмут
+   * снова и снова.
+   *
+   * Несколько непройденных адресов — сначала спрашиваем, какой меняем;
+   * один — сразу к поиску.
+   */
+  const editablePoints = useMemo(() => (order ? editableRoutePoints(order) : []), [order]);
+  const canChangeAddress = editablePoints.length > 0;
+
+  const openAddressChange = useCallback(async () => {
+    if (!order) return;
+    haptics.tap();
+    if (!canChangeAddress) {
+      await notify(
+        'Адрес пока меняет диспетчер',
+        'Сменить адрес можно, когда клиент уже в машине. Если адрес подачи другой — позвоните диспетчеру.',
+      );
+      return;
+    }
+
+    let chosen = editablePoints[0];
+    if (editablePoints.length > 1) {
+      const index = await askDialog({
+        title: 'Какой адрес меняем?',
+        actions: editablePoints.map((p) => ({
+          label: `${p.label}: ${
+            p.address
+              ? shortenStreetType(splitAddressEntrance(p.address, p.entrance).address)
+              : 'не указан'
+          }`,
+          icon: p.current ? 'navigate-outline' : 'location-outline',
+        })),
+      });
+      if (index == null) return;
+      chosen = editablePoints[index];
+    }
+    if (!chosen) return;
+
+    router.push({
+      pathname: '/(main)/change-address',
+      params: {
+        orderId: order.id,
+        point: routePointKey(chosen.ref),
+        label: chosen.label,
+        address: chosen.address ?? '',
+        entrance: chosen.entrance ?? '',
+        current: chosen.current ? '1' : '0',
+      },
+    } as never);
+  }, [order, canChangeAddress, editablePoints, notify, askDialog, router]);
 
   const call = (phone: string) => {
     haptics.tap();
@@ -1025,53 +1073,65 @@ export default function CurrentOrderScreen() {
             onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
           >
             {/**
-             * Полоса этапов и кнопки — В ОДНОЙ строке (1.5.31).
+             * Полоса этапов — во всю ширину, кнопки — в строке подписи цели
+             * (1.5.61).
              *
-             * Раньше кнопки стояли справа от адреса и съедали его ширину:
-             * «Набережная, д. 76» не помещалось в строку и переносилось.
-             * Здесь они не стоят ни одной новой строки — полоса всё равно
-             * занимает эту, а справа от неё было пусто.
-             *
-             * Кнопки уменьшены, чтобы четыре подписи этапов не сжались до
-             * переноса. Зона нажатия при этом осталась прежней: `IconButton`
-             * добирает её невидимым запасом (см. его шапку).
+             * С 1.5.31 кнопки стояли в одной строке с полосой. Третья кнопка
+             * («Сменить адрес») отняла у каждой подписи этапа по 11 точек, и
+             * «Поездка» обрезалась до «Поезд…» (снимок эмулятора
+             * 13.09.2026). Ни шрифт мельче 12, ни кнопки мельче 36 проект не
+             * допускает, поэтому кнопки переехали в строку «ТОЧКА 2 · …»: справа
+             * от короткой подписи было пусто. Адрес под ней по-прежнему во всю
+             * ширину — ради этого кнопки и убирали от адреса в 1.5.31. Зона
+             * нажатия кнопок прежняя: `IconButton` добирает её невидимым запасом.
              */}
-            <View style={styles.progressRow}>
-              <View style={styles.progressBar}>
-                <OrderProgress status={order.status} />
-              </View>
-              <View style={styles.targetActions}>
-                <IconButton
-                  icon="call"
-                  size={HEADER_ACTION_SIZE}
-                  onPress={() => void askWhomToCall()}
-                  accessibilityLabel="Позвонить"
-                  background={colors.successSoft}
-                  color={colors.success}
-                />
-                {target.lat != null && target.lng != null && (
-                  <IconButton
-                    icon="navigate"
-                    size={HEADER_ACTION_SIZE}
-                    onPress={() => openNavigator(target.lat!, target.lng!)}
-                    accessibilityLabel="Открыть в навигаторе"
-                    background={colors.primarySoft}
-                    color={colors.primary}
-                  />
-                )}
-              </View>
-            </View>
+            <OrderProgress status={order.status} />
 
             <View style={styles.targetBlock}>
-              {/* Город приписан к подписи этапа, а не отдельной строкой: в
-                  шторке каждая строка на счету, а нужен он только в
-                  межгороде — сервер и присылает его лишь тогда. Само слово
-                  этапа не лишнее: подпись принимает и значение
-                  «Остановка», о которой полоса этапов не знает вовсе. */}
-              <AppText variant="overline" tone="muted">
-                {target.label}
-                {order.cityLabel ? ` · ${order.cityLabel}` : ''}
-              </AppText>
+              <View style={styles.targetLabelRow}>
+                {/* Город приписан к подписи этапа, а не отдельной строкой: в
+                    шторке каждая строка на счету, а нужен он только в
+                    межгороде — сервер и присылает его лишь тогда. Само слово
+                    этапа не лишнее: подпись принимает и значение
+                    «Остановка», о которой полоса этапов не знает вовсе. */}
+                <AppText variant="overline" tone="muted" style={styles.targetLabel}>
+                  {target.label}
+                  {order.cityLabel ? ` · ${order.cityLabel}` : ''}
+                </AppText>
+                <View style={styles.targetActions}>
+                  <IconButton
+                    icon="call"
+                    size={HEADER_ACTION_SIZE}
+                    onPress={() => void askWhomToCall()}
+                    accessibilityLabel="Позвонить"
+                    background={colors.successSoft}
+                    color={colors.success}
+                  />
+                  {target.lat != null && target.lng != null && (
+                    <IconButton
+                      icon="navigate"
+                      size={HEADER_ACTION_SIZE}
+                      onPress={() => openNavigator(target.lat!, target.lng!)}
+                      accessibilityLabel="Открыть в навигаторе"
+                      background={colors.primarySoft}
+                      color={colors.primary}
+                    />
+                  )}
+                  {/* Третья кнопка (1.5.61) — сменить адрес. Тусклая, пока
+                      клиента нет в машине: см. `openAddressChange`. */}
+                  <IconButton
+                    icon="create-outline"
+                    size={HEADER_ACTION_SIZE}
+                    onPress={() => void openAddressChange()}
+                    accessibilityLabel={
+                      canChangeAddress ? 'Сменить адрес' : 'Сменить адрес можно после посадки клиента'
+                    }
+                    background={colors.warningSoft}
+                    color={colors.warning}
+                    style={canChangeAddress ? undefined : styles.actionDimmed}
+                  />
+                </View>
+              </View>
 
               {/**
                 * Подъезд — ОБЫЧНЫМ ТЕКСТОМ ВНУТРИ адреса (1.5.33).
@@ -1941,11 +2001,13 @@ const createStyles = (t: Theme) =>
       gap: spacing.md,
     },
     targetBlock: { gap: spacing.xs },
-    // Полоса этапов забирает всю свободную ширину и потому начинается у
-    // левого края шторки; кнопки прижаты к правому.
-    progressRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-    progressBar: { flex: 1 },
+    // Подпись цели слева, кнопки прижаты к правому краю (1.5.61). Подпись
+    // переносится, а не обрезается: город межгорода терять нельзя.
+    targetLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    targetLabel: { flex: 1 },
     targetActions: { flexDirection: 'row', gap: spacing.sm },
+    // Кнопка, нажатие которой сейчас только объясняет, почему нельзя.
+    actionDimmed: { opacity: 0.4 },
 
     sheetBody: { padding: spacing.lg, paddingTop: 0, gap: spacing.lg },
     section: { gap: spacing.sm },

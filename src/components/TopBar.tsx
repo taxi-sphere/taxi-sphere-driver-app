@@ -20,11 +20,11 @@
  *     замечать сразу.
  *
  * @dependencies:
- *   - @/hooks/useDriverStatus, useDriverProfile, useLocationTracking
- *   - @/stores/connection.store
+ *   - @/hooks/useShiftToggle, useDriverProfile, useLocationTracking
+ *   - @/stores/connection.store, chat.store, news.store
  *   - @/lib/theme, @/components/ui
  * @created: 2026-03-18 07:00:00
- * @updated: 2026-09-09 (1.5.51 — плашка учитывает отметку «не предлагайте заказы»)
+ * @updated: 2026-09-13 (1.5.61 — число непрочитанного на кнопке меню, правило статуса в useShiftToggle)
  */
 
 import { useEffect } from 'react';
@@ -39,9 +39,10 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useDriverStatus } from '@/hooks/useDriverStatus';
-import { useAcceptingOrders } from '@/hooks/useAcceptingOrders';
+import { useShiftToggle } from '@/hooks/useShiftToggle';
 import { useDriverProfile } from '@/hooks/useDriverProfile';
+import { useChatStore } from '@/stores/chat.store';
+import { useNewsStore } from '@/stores/news.store';
 import { useLocationTracking } from '@/hooks/useLocationTracking';
 import { useConnectionStore } from '@/stores/connection.store';
 import { formatCurrency } from '@/lib/utils';
@@ -114,10 +115,21 @@ const ON_ORDER_VIEW: Record<'accepting' | 'refusing', StatusView> = {
 
 export function TopBar({ onMenuPress }: TopBarProps) {
   const router = useRouter();
-  const { status, setStatusTo, isUpdating } = useDriverStatus();
   // На заказе та же пилюля переключает готовность взять встречный (1.5.23).
-  const accepting = useAcceptingOrders();
+  // Правило переключения — общее с кнопкой «Выйти на линию» (1.5.61).
+  const shift = useShiftToggle();
   const { isTracking } = useLocationTracking();
+
+  /**
+   * Непрочитанное — числом на кнопке меню (1.5.61).
+   *
+   * Числа у «Диспетчер» и «Объявления» внутри меню были с 1.5.52, но меню
+   * закрыто почти всю смену, и увидеть их можно было, только открыв его
+   * наугад. Счётчики ведёт `DrawerMenu` — он смонтирован всё время работы
+   * приложения, — здесь они только читаются.
+   */
+  const unread =
+    useChatStore((s) => s.unreadCount) + useNewsStore((s) => s.unreadCount);
   const socketStatus = useConnectionStore((s) => s.socketStatus);
   const isConnected = socketStatus === 'connected';
 
@@ -128,44 +140,20 @@ export function TopBar({ onMenuPress }: TopBarProps) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
 
-  const onOrder = status === 'on_order';
-
   /**
    * ВНЕ ЗАКАЗА ПИЛЮЛЯ ТОЖЕ СМОТРИТ НА `acceptingOrders` (1.5.51).
    *
    * У водителя ДВА независимых признака: `status` — состояние смены, и
-   * `acceptingOrders` — «предлагайте / не предлагайте». Второй можно было
-   * выключить только на заказе, а выключенным он оставался и после
-   * высадки. Итог на скриншоте владельца: шапка пишет «СВОБОДЕН», а список
-   * заказов под ней — «Вы отметили себя занятым, новые заказы не
-   * предлагаются». Оба верны, и оба про одно и то же — брать ли работу.
-   *
-   * Экран не имеет права говорить «свободен», когда сервер водителю
-   * заказов не шлёт. Поэтому «занят» показывается, если верно ЛЮБОЕ из
-   * двух, а снятие ставит оба признака в согласованное состояние — иначе
-   * нажатие «освободиться» лечило бы только половину.
+   * `acceptingOrders` — «предлагайте / не предлагайте». Итог на скриншоте
+   * владельца до 1.5.51: шапка пишет «СВОБОДЕН», а список заказов под ней —
+   * «Вы отметили себя занятым». Правило, по которому показывать и
+   * переключать оба признака, с 1.5.61 живёт в `useShiftToggle`.
    */
-  const refusing = !accepting.accepting;
-  const effectiveStatus: DriverStatus =
-    !onOrder && status === 'online' && refusing ? 'busy' : status;
+  const { onOrder, effectiveStatus, toggle, isBusy } = shift;
 
   const view = onOrder
-    ? ON_ORDER_VIEW[accepting.accepting ? 'accepting' : 'refusing']
+    ? ON_ORDER_VIEW[shift.accepting ? 'accepting' : 'refusing']
     : (STATUS_VIEW[effectiveStatus] ?? STATUS_VIEW.offline);
-
-  // На заказе жмём готовность взять встречный, вне заказа — статус смены
-  // И отметку «не предлагайте» вместе с ним: решение одно, признака два.
-  const toggle = onOrder
-    ? accepting.toggle
-    : () => {
-        const goingFree = effectiveStatus !== 'online';
-        if (accepting.accepting !== goingFree) accepting.toggle();
-        const target: DriverStatus = goingFree ? 'online' : 'busy';
-        if (status !== target) setStatusTo(target);
-      };
-  const isBusy = onOrder
-    ? accepting.isPending
-    : isUpdating || accepting.isPending;
   const canToggle = isConnected && view.togglable && !isBusy;
 
   const scale = useSharedValue(1);
@@ -177,14 +165,28 @@ export function TopBar({ onMenuPress }: TopBarProps) {
   return (
     <View style={styles.wrapper}>
       <View style={styles.topRow}>
-        <IconButton
-          icon="menu"
-          onPress={onMenuPress}
-          accessibilityLabel="Открыть меню"
-          size={touch.min}
-          background="transparent"
-          color={colors.textSecondary}
-        />
+        <View>
+          <IconButton
+            icon="menu"
+            onPress={onMenuPress}
+            accessibilityLabel={
+              unread > 0 ? `Открыть меню, непрочитанных: ${unread}` : 'Открыть меню'
+            }
+            size={touch.min}
+            background="transparent"
+            color={colors.textSecondary}
+          />
+          {unread > 0 ? (
+            <View
+              pointerEvents="none"
+              style={[styles.menuBadge, { backgroundColor: colors.danger }]}
+            >
+              <AppText weight="700" style={[styles.menuBadgeText, { color: colors.textInverse }]}>
+                {unread > 99 ? '99+' : unread}
+              </AppText>
+            </View>
+          ) : null}
+        </View>
 
         <Animated.View style={[styles.pillWrap, pillStyle]}>
           <Pressable
@@ -372,6 +374,22 @@ const createStyles = (t: Theme) =>
       paddingRight: spacing.xs,
     },
     indicator: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+    // Число поверх правого верхнего угла гамбургера. Обводка цветом шапки
+    // отделяет его от линий иконки, иначе «2» сливалось с ними.
+    menuBadge: {
+      position: 'absolute',
+      top: 2,
+      right: 0,
+      minWidth: 20,
+      height: 20,
+      borderRadius: 10,
+      paddingHorizontal: 4,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 2,
+      borderColor: t.colors.surface,
+    },
+    menuBadgeText: { fontSize: 11, lineHeight: 14 },
 
     statRow: {
       flexDirection: 'row',

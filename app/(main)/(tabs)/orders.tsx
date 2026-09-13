@@ -19,7 +19,7 @@
  * @dependencies: useAvailableOrders, useScheduledOrders, useOrderActions,
  *                @/components/order/OrderCard, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-13 (1.5.60 — подошедший предзаказ в «Сейчас»)
+ * @updated: 2026-09-13 (1.5.61 — кнопка «Выйти на линию» на пустом списке)
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -30,6 +30,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAvailableOrders } from '@/hooks/useAvailableOrders';
 import { activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
 import { useOrderActions } from '@/hooks/useOrderActions';
+import { useShiftToggle } from '@/hooks/useShiftToggle';
 import { useConnectionStore } from '@/stores/connection.store';
 import { useOfferStore } from '@/stores/offer.store';
 import { isOrderCurrent } from '@/lib/preorder-timing';
@@ -81,6 +82,7 @@ export default function OrdersScreen() {
   const { data: orders, isLoading, refetch, meta, error, isOffline, isDriverOffline } =
     useAvailableOrders();
   const { accept } = useOrderActions();
+  const shift = useShiftToggle();
   const socketStatus = useConnectionStore((s) => s.socketStatus);
   const isDisconnected = socketStatus !== 'connected';
 
@@ -401,6 +403,8 @@ export default function OrdersScreen() {
               hiddenByFilter={all.length > 0 ? orderKind : null}
               onShowAll={() => setOrderKind('all')}
               onGoToOrder={() => router.replace('/(main)/(tabs)/current')}
+              onGoOnline={shift.toggle}
+              goingOnline={shift.isBusy}
             />
           }
         />
@@ -510,6 +514,8 @@ function AvailableEmpty({
   hiddenByFilter,
   onShowAll,
   onGoToOrder,
+  onGoOnline,
+  goingOnline,
 }: {
   blockedMessage: string | null;
   /** Сети нет — список не пуст, его просто неоткуда взять. */
@@ -524,16 +530,26 @@ function AvailableEmpty({
   hiddenByFilter: OrderKind | null;
   onShowAll: () => void;
   onGoToOrder: () => void;
+  /** Выйти на линию — то же, что нажать статус в шапке. */
+  onGoOnline: () => void;
+  /** Запрос на выход уже ушёл. */
+  goingOnline: boolean;
 }) {
   // Раньше всего остального: водитель вне линии видел «Свободных заказов
   // нет» и ждал, что они появятся сами. Они не появятся — запрос выключен.
+  //
+  // Кнопка прямо здесь (1.5.61). До неё экран отсылал к шапке словами, и
+  // по замечанию владельца водитель жал на крупный значок в центре — а он
+  // не нажимался. Действие ровно то же, что у пилюли в шапке: одно правило
+  // в `useShiftToggle`.
   if (driverOffline) {
     return (
       <EmptyState
         icon="power-outline"
         tone="warning"
         title="Вы не на линии"
-        description="Заказы не приходят, пока статус «Оффлайн». Смените статус в шапке экрана."
+        description="Заказы не приходят, пока вы не на линии."
+        action={{ label: 'Выйти на линию', onPress: onGoOnline, loading: goingOnline }}
       />
     );
   }

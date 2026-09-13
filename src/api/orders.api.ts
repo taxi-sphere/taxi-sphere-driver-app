@@ -4,10 +4,12 @@
  *   API-вызовы заказов: доступные, текущий, принять, прибыл, начать, завершить.
  * @dependencies: api/client, schemas/order.schema
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-13 (1.5.59 — declineOffer, отказ от предложенного заказа)
+ * @updated: 2026-09-13 (1.5.61 — changeOrderAddress, смена адреса в поездке)
  */
 
 import { apiGet, apiPost } from './client';
+import type { RoutePointRef } from '@/lib/route-edit';
+import type { AddressSuggestion } from '@/types/address';
 import {
   activeOrdersResponseSchema,
   orderDetailsResponseSchema,
@@ -339,6 +341,44 @@ export async function arriveStop(
   stopId: string,
 ): Promise<{ success: true; data: { stopId: string; arrivedAt: string } }> {
   return apiPost(`driver/orders/${orderId}/stops/${stopId}/arrive`);
+}
+
+/**
+ * Что сервер записал после смены адреса.
+ *
+ * Предварительной цены здесь нет: сервер пересчитывает её после ответа и
+ * присылает обновлённый заказ событием `order:updated` — маршрутизатор
+ * бывает медленным, а ждать его с клиентом в машине незачем.
+ */
+export interface ChangeAddressResult {
+  /** «Куда», «Точка 2». */
+  label: string;
+  address: string;
+  entrance: string | null;
+  lat: number;
+  lng: number;
+}
+
+/**
+ * Поменять адрес в поездке — клиент назвал другую точку (сервер v1.100.15).
+ *
+ * Строку адреса сервер собирает сам, тем же правилом, что пульт: сюда уходит
+ * выбранная подсказка как есть и подъезд из поля. Отказ приходит с текстом
+ * для водителя («Эта точка уже пройдена») — его и показывать.
+ */
+export async function changeOrderAddress(
+  orderId: string,
+  body: {
+    point: RoutePointRef;
+    suggestion: Pick<AddressSuggestion, 'name' | 'address' | 'city' | 'region' | 'lat' | 'lng'>;
+    entrance: string;
+  },
+): Promise<ChangeAddressResult> {
+  const res = await apiPost<{ success: true; data: ChangeAddressResult }>(
+    `driver/orders/${orderId}/change-address`,
+    body,
+  );
+  return res.data;
 }
 
 /** Завершить поездку */
