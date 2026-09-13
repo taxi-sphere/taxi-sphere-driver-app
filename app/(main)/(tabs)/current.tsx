@@ -45,8 +45,7 @@
  * @dependencies: useActiveOrders, useOrderActions, @/components/ui,
  *                @/components/order/*, @/components/map/OrderMap
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-13 (1.5.61 — третья кнопка «Сменить адрес»: клиент в машине
- *                        назвал другую точку; ссылки навигаторов в navigator-url)
+ * @updated: 2026-09-13 (1.5.63 — полоса этапов и кнопки одной строкой, без «Готово»)
  */
 
 import {
@@ -1073,65 +1072,68 @@ export default function CurrentOrderScreen() {
             onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
           >
             {/**
-             * Полоса этапов — во всю ширину, кнопки — в строке подписи цели
-             * (1.5.61).
+             * Полоса этапов и кнопки — ОДНОЙ строкой (1.5.63, решение
+             * владельца).
              *
-             * С 1.5.31 кнопки стояли в одной строке с полосой. Третья кнопка
-             * («Сменить адрес») отняла у каждой подписи этапа по 11 точек, и
-             * «Поездка» обрезалась до «Поезд…» (снимок эмулятора
-             * 13.09.2026). Ни шрифт мельче 12, ни кнопки мельче 36 проект не
-             * допускает, поэтому кнопки переехали в строку «ТОЧКА 2 · …»: справа
-             * от короткой подписи было пусто. Адрес под ней по-прежнему во всю
-             * ширину — ради этого кнопки и убирали от адреса в 1.5.31. Зона
-             * нажатия кнопок прежняя: `IconButton` добирает её невидимым запасом.
+             * В 1.5.61 кнопки уехали в строку подписи цели: третья кнопка
+             * («Сменить адрес») рядом с четырьмя этапами обрезала «Поездка» до
+             * «Поезд…». Но строка подписи от кнопок стала высотой в кнопку
+             * (36 точек) — и свёрнутая шторка на столько же отняла карту.
+             * Этап «Готово» водитель в полосе не видит никогда (после
+             * завершения — карточка с суммой), без него трём этапам
+             * достаётся около 65 точек, и «Поездка» помещается. Строка подписи
+             * снова тонкая, шторка ниже примерно на 20 точек. Зона нажатия
+             * кнопок прежняя: `IconButton` добирает её невидимым запасом.
              */}
-            <OrderProgress status={order.status} />
+            <View style={styles.progressRow}>
+              <View style={styles.progress}>
+                <OrderProgress status={order.status} />
+              </View>
+              <View style={styles.targetActions}>
+                <IconButton
+                  icon="call"
+                  size={HEADER_ACTION_SIZE}
+                  onPress={() => void askWhomToCall()}
+                  accessibilityLabel="Позвонить"
+                  background={colors.successSoft}
+                  color={colors.success}
+                />
+                {target.lat != null && target.lng != null && (
+                  <IconButton
+                    icon="navigate"
+                    size={HEADER_ACTION_SIZE}
+                    onPress={() => openNavigator(target.lat!, target.lng!)}
+                    accessibilityLabel="Открыть в навигаторе"
+                    background={colors.primarySoft}
+                    color={colors.primary}
+                  />
+                )}
+                {/* Третья кнопка (1.5.61) — сменить адрес. Тусклая, пока
+                    клиента нет в машине: см. `openAddressChange`. */}
+                <IconButton
+                  icon="create-outline"
+                  size={HEADER_ACTION_SIZE}
+                  onPress={() => void openAddressChange()}
+                  accessibilityLabel={
+                    canChangeAddress ? 'Сменить адрес' : 'Сменить адрес можно после посадки клиента'
+                  }
+                  background={colors.warningSoft}
+                  color={colors.warning}
+                  style={canChangeAddress ? undefined : styles.actionDimmed}
+                />
+              </View>
+            </View>
 
             <View style={styles.targetBlock}>
-              <View style={styles.targetLabelRow}>
-                {/* Город приписан к подписи этапа, а не отдельной строкой: в
-                    шторке каждая строка на счету, а нужен он только в
-                    межгороде — сервер и присылает его лишь тогда. Само слово
-                    этапа не лишнее: подпись принимает и значение
-                    «Остановка», о которой полоса этапов не знает вовсе. */}
-                <AppText variant="overline" tone="muted" style={styles.targetLabel}>
-                  {target.label}
-                  {order.cityLabel ? ` · ${order.cityLabel}` : ''}
-                </AppText>
-                <View style={styles.targetActions}>
-                  <IconButton
-                    icon="call"
-                    size={HEADER_ACTION_SIZE}
-                    onPress={() => void askWhomToCall()}
-                    accessibilityLabel="Позвонить"
-                    background={colors.successSoft}
-                    color={colors.success}
-                  />
-                  {target.lat != null && target.lng != null && (
-                    <IconButton
-                      icon="navigate"
-                      size={HEADER_ACTION_SIZE}
-                      onPress={() => openNavigator(target.lat!, target.lng!)}
-                      accessibilityLabel="Открыть в навигаторе"
-                      background={colors.primarySoft}
-                      color={colors.primary}
-                    />
-                  )}
-                  {/* Третья кнопка (1.5.61) — сменить адрес. Тусклая, пока
-                      клиента нет в машине: см. `openAddressChange`. */}
-                  <IconButton
-                    icon="create-outline"
-                    size={HEADER_ACTION_SIZE}
-                    onPress={() => void openAddressChange()}
-                    accessibilityLabel={
-                      canChangeAddress ? 'Сменить адрес' : 'Сменить адрес можно после посадки клиента'
-                    }
-                    background={colors.warningSoft}
-                    color={colors.warning}
-                    style={canChangeAddress ? undefined : styles.actionDimmed}
-                  />
-                </View>
-              </View>
+              {/* Город приписан к подписи этапа, а не отдельной строкой: в
+                  шторке каждая строка на счету, а нужен он только в
+                  межгороде — сервер и присылает его лишь тогда. Само слово
+                  этапа не лишнее: подпись принимает и значение «Остановка»,
+                  о которой полоса этапов не знает вовсе. */}
+              <AppText variant="overline" tone="muted">
+                {target.label}
+                {order.cityLabel ? ` · ${order.cityLabel}` : ''}
+              </AppText>
 
               {/**
                 * Подъезд — ОБЫЧНЫМ ТЕКСТОМ ВНУТРИ адреса (1.5.33).
@@ -2001,10 +2003,10 @@ const createStyles = (t: Theme) =>
       gap: spacing.md,
     },
     targetBlock: { gap: spacing.xs },
-    // Подпись цели слева, кнопки прижаты к правому краю (1.5.61). Подпись
-    // переносится, а не обрезается: город межгорода терять нельзя.
-    targetLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-    targetLabel: { flex: 1 },
+    // Полоса этапов слева, кнопки прижаты к правому краю (1.5.63). Полоса
+    // забирает всю оставшуюся ширину — подписям этапов нужна каждая точка.
+    progressRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    progress: { flex: 1 },
     targetActions: { flexDirection: 'row', gap: spacing.sm },
     // Кнопка, нажатие которой сейчас только объясняет, почему нельзя.
     actionDimmed: { opacity: 0.4 },

@@ -1,6 +1,6 @@
 {
   "name": "taxi-sphere-driver-app",
-  "version": "1.5.62",
+  "version": "1.5.63",
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
