@@ -5,7 +5,7 @@
  *   Управляет подключением, переподключением, подпиской на события.
  * @dependencies: socket.io-client, connection.store
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-09 (1.5.52 — подписка на chat:message)
+ * @updated: 2026-09-13 (1.5.59 — подписка на order:offer)
  */
 
 import { io, type Socket } from 'socket.io-client';
@@ -14,6 +14,7 @@ import { useConnectionStore } from '@/stores/connection.store';
 import { driverLogger } from '@/services/logger.service';
 import type {
   OrderNewEvent,
+  OrderOfferEvent,
   OrderStatusEvent,
   OrderCanceledEvent,
 } from '@/types/socket-events';
@@ -149,6 +150,17 @@ class SocketService {
   /** Подписка на событие «новый заказ» */
   onOrderNew(callback: EventCallback<OrderNewEvent>): () => void {
     return this.subscribe('order:new', callback);
+  }
+
+  /**
+   * Заказ предложен этому водителю (1.5.59, сервер v1.100.13).
+   *
+   * Сервер предлагал заказы адресно с марта, но тем же `order:new`, что и
+   * общий список, и без срока: приложение звенело, как на любой заказ, и
+   * водитель не знал, что заказ его. Подписчик — `OrderOfferWatcher`.
+   */
+  onOrderOffer(callback: EventCallback<OrderOfferEvent>): () => void {
+    return this.subscribe('order:offer', callback);
   }
 
   /** Подписка на событие «изменение статуса заказа» */

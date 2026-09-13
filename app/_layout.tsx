@@ -28,9 +28,9 @@
  *                expo-keep-awake, expo-system-ui,
  *                react-native-gesture-handler,
  *                @/services/logger.service, @/components/RootErrorBoundary,
- *                @/lib/theme
+ *                @/lib/theme, @/components/OrderOfferWatcher
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-01 (v1.5.17 — gesture root, системные цвета по теме)
+ * @updated: 2026-09-13 (1.5.59 — окно предложения заказа в корне)
  */
 
 import { useEffect } from 'react';
@@ -42,6 +42,7 @@ import * as SystemUI from 'expo-system-ui';
 import { AppProviders } from '@/providers/AppProviders';
 import { ScheduledConfirmationWatcher } from '@/components/ScheduledConfirmationWatcher';
 import { OrderCanceledWatcher } from '@/components/OrderCanceledWatcher';
+import { OrderOfferWatcher } from '@/components/OrderOfferWatcher';
 import { useAuthStore } from '@/stores/auth.store';
 import { RootErrorBoundary } from '@/components/RootErrorBoundary';
 import { AppUpdateNotifier } from '@/components/AppUpdateNotifier';
@@ -127,6 +128,9 @@ export default function RootLayout() {
               Живёт в корне, потому что спросить надо там, где водитель
               сейчас, — в списке, в поездке или в «Деньгах». */}
           <ScheduledConfirmationWatcher />
+          {/* Предложение заказа (1.5.59): сервер держит заказ за водителем
+              30 секунд, и окно должно открыться, где бы он ни был. */}
+          <OrderOfferWatcher />
           {/* Отмена заказа: водителю говорят, что произошло, вместо того
               чтобы молча убрать заказ с экрана. */}
           <OrderCanceledWatcher />

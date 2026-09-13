@@ -18,10 +18,10 @@
  *
  * @dependencies: useOrderActions, orders.api, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-02 (v1.5.23 — свой эндпоинт, режим «мой заказ», объяснение отказа)
+ * @updated: 2026-09-13 (1.5.59 — окно «взять» уступает окну предложения)
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -51,6 +51,7 @@ import {
   OfflineState,
 } from '@/components/ui';
 import { useConnectionStore } from '@/stores/connection.store';
+import { useOfferStore } from '@/stores/offer.store';
 
 const ACCEPT_TIMER_SEC = 30;
 const DEFAULT_ETA_MIN = 5;
@@ -84,6 +85,13 @@ export default function OrderDetailScreen() {
   const order = details?.order;
 
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Сервер предложил заказ (1.5.59) — своё окно уступает «Входящему заказу»,
+  // как и в списке свободных.
+  const offeredOrderId = useOfferStore((s) => s.current?.event.orderId ?? null);
+  useEffect(() => {
+    if (offeredOrderId && !accept.isPending) setConfirmOpen(false);
+  }, [offeredOrderId, accept.isPending]);
 
   const etaQuery = useQuery({
     queryKey: ['order', order?.id, 'eta-estimate'],

@@ -5,9 +5,10 @@
  *   в зависимости от состояния авторизации.
  *   При ошибке токена — автоматически refresh и переподключение.
  *   Инвалидирует React Query при получении событий.
- * @dependencies: socket.service, auth.store, token.service, @tanstack/react-query
+ * @dependencies: socket.service, auth.store, offer.store, token.service,
+ *                @tanstack/react-query
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-10 (1.5.54 — сигнал о заказе, попавшем в список свободных)
+ * @updated: 2026-09-13 (1.5.59 — не звенеть о заказе, который уже предложен окном)
  */
 
 import { useEffect, useRef } from 'react';
@@ -15,6 +16,7 @@ import { AppState } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth.store';
 import { useChatStore } from '@/stores/chat.store';
+import { useOfferStore } from '@/stores/offer.store';
 import { socketService } from '@/services/socket.service';
 import { showLocalNotification } from '@/services/notification.service';
 import { playSound } from '@/services/sound.service';
@@ -142,6 +144,14 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           queryKey: ['orders', 'available'],
           type: 'all',
         });
+
+        /**
+         * Этот заказ уже предложен водителю окном (1.5.59). Сервер шлёт
+         * `order:new` следом за `order:offer` ради старых сборок, и здесь
+         * он дал бы второй звук и второе уведомление о том же заказе —
+         * у окна свой звук, вибрация и уведомление «Вам предложен заказ».
+         */
+        if (useOfferStore.getState().current?.event.orderId === data?.orderId) return;
 
         if (AppState.currentState !== 'active') {
           // v1.5.9: обращаемся к типизированному полю напрямую. Приведение

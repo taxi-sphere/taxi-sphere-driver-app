@@ -4,7 +4,7 @@
  *   API-вызовы заказов: доступные, текущий, принять, прибыл, начать, завершить.
  * @dependencies: api/client, schemas/order.schema
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-03 (1.5.28 — releaseOrder, человеческий текст ошибок)
+ * @updated: 2026-09-13 (1.5.59 — declineOffer, отказ от предложенного заказа)
  */
 
 import { apiGet, apiPost } from './client';
@@ -228,6 +228,29 @@ export async function releaseOrder(
         'Сервер не принял отказ. Попробуйте ещё раз или свяжитесь с диспетчером.',
       ),
     };
+  }
+}
+
+/**
+ * Отказаться от ПРЕДЛОЖЕННОГО заказа (1.5.59).
+ *
+ * Не `releaseOrder`: тот отдаёт уже взятый заказ. Сервер v1.100.13 после
+ * отказа сразу предлагает заказ следующему водителю — поэтому отказ стоит
+ * отправить, а не просто закрыть окно и ждать, пока предложение истечёт.
+ *
+ * Ошибку водителю не показываем: 404 значит, что предложение уже истекло
+ * или заказ забрали, — отказываться не от чего, а окно и так закрыто.
+ */
+export async function declineOffer(orderId: string): Promise<void> {
+  try {
+    await apiPost(`driver/orders/${orderId}/decline`, {});
+  } catch (error) {
+    driverLogger.warn('Отказ от предложения не принят сервером', {
+      stack: error instanceof Error ? error.message : String(error),
+      screen: 'orders.api',
+      action: 'decline_offer',
+      extra: { orderId },
+    });
   }
 }
 

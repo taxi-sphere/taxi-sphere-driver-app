@@ -19,7 +19,7 @@
  * @dependencies: useAvailableOrders, useScheduledOrders, useOrderActions,
  *                @/components/order/OrderCard, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-10 (1.5.54 — фильтр «Все / Сейчас / Предзаказы»)
+ * @updated: 2026-09-13 (1.5.59 — окно «взять» уступает окну предложения)
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -31,6 +31,7 @@ import { useAvailableOrders } from '@/hooks/useAvailableOrders';
 import { activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
 import { useOrderActions } from '@/hooks/useOrderActions';
 import { useConnectionStore } from '@/stores/connection.store';
+import { useOfferStore } from '@/stores/offer.store';
 import { socketService } from '@/services/socket.service';
 import { getOrderEtaEstimate } from '@/api/orders.api';
 import { IncomingOrderModal } from '@/components/IncomingOrderModal';
@@ -120,6 +121,16 @@ export default function OrdersScreen() {
 
   // Выбранный заказ для модалки подтверждения
   const [pendingOrder, setPendingOrder] = useState<AvailableOrder | null>(null);
+
+  /**
+   * Сервер предложил заказ (1.5.59) — своё окно закрываем: поверх него
+   * откроется «Входящий заказ», и два окна друг на друге водитель не
+   * разберёт. Кроме случая, когда принятие уже отправлено.
+   */
+  const offeredOrderId = useOfferStore((s) => s.current?.event.orderId ?? null);
+  useEffect(() => {
+    if (offeredOrderId && !accept.isPending) setPendingOrder(null);
+  }, [offeredOrderId, accept.isPending]);
 
   // Загрузка рекомендованного времени подачи от сервера
   const etaQuery = useQuery({

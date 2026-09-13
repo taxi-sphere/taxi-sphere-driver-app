@@ -6,7 +6,10 @@
  *
  *   Режимы:
  *   - 'confirm': водитель сам тапнул заказ в списке (таймер 30 сек).
- *   - 'offer':   заказ пришёл от сервера (таймер из пропа `timerSec`).
+ *   - 'offer':   заказ предложил сервер (таймер из пропа `timerSec`). Режим
+ *     был написан давно, но включать его было нечем — сервер не присылал
+ *     предложение отдельным событием. С 1.5.59 его показывает
+ *     `OrderOfferWatcher`.
  *
  *   Особенности:
  *   - Селектор времени подачи: пресеты под рекомендацию сервера, шаг
@@ -39,7 +42,7 @@
  *   - @/lib/utils (splitAddressEntrance, stripSharedCityPrefix,
  *     pickupEtaStep, pickupEtaPresets)
  *   - react-native-safe-area-context (отступ под системной панелью)
- * @updated: 2026-09-09 (1.5.51 — отступ под системную панель, крупнее кнопки времени)
+ * @updated: 2026-09-13 (1.5.59 — onTimeout, окно больше не закрывается само после истёкшего таймера)
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -115,12 +118,24 @@ export interface IncomingOrderModalProps {
    * старый сервер, считаем сами.
    */
   etaPresets?: number[];
-  /** Длительность таймера в секундах (обычно 30 для confirm, 15 для offer). */
+  /**
+   * Сколько секунд на решение. Для `confirm` — 30; для `offer` — сколько
+   * осталось у предложения на сервере в момент открытия окна.
+   */
   timerSec: number;
   /** Идёт ли сетевой запрос acceptOrder. */
   accepting?: boolean;
   onAccept: (pickupEtaMin: number) => void;
+  /** Водитель закрыл окно сам: крестик или «назад». */
   onDismiss: () => void;
+  /**
+   * Время вышло (1.5.59). Отдельно от `onDismiss`, потому что для
+   * предложения это разные ответы серверу: крестик — отказ, который сервер
+   * сразу передаёт следующему, а истечение сервер отработает сам, и слать
+   * отказ вдогонку значило бы получить штраф за молчание. Не задан — вызов
+   * уходит в `onDismiss`, как было.
+   */
+  onTimeout?: () => void;
 }
 
 /**
@@ -377,12 +392,25 @@ export function IncomingOrderModal({
   accepting,
   onAccept,
   onDismiss,
+  onTimeout,
 }: IncomingOrderModalProps) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
   const insets = useSafeAreaInsets();
   const [etaMin, setEtaMin] = useState<number>(initialEtaMin ?? 5);
-  const [remaining, setRemaining] = useState<number>(timerSec);
+  /**
+   * Обратный отсчёт и признак «взведён для этого открытия» — одним
+   * состоянием (1.5.59).
+   *
+   * ЧТО БЫЛО СЛОМАНО. Отсчёт сбрасывался эффектом при открытии, а проверка
+   * «время вышло» шла в том же проходе эффектов — со СТАРЫМ значением. Окно,
+   * однажды закрытое по таймеру, хранило ноль, и при следующем открытии
+   * проверка видела этот ноль раньше сброса и тут же закрывала окно: водитель
+   * нажимал на заказ, и ничего не происходило. Взведённым отсчёт становится
+   * только вместе со своим сбросом, поэтому устаревший ноль не сработает.
+   */
+  const [countdown, setCountdown] = useState({ remaining: timerSec, armed: false });
+  const remaining = countdown.remaining;
   const pulse = useRef(new Animated.Value(0)).current;
 
   /**
@@ -420,11 +448,9 @@ export function IncomingOrderModal({
     };
   }, [order]);
 
-  // Сброс состояния при каждом открытии
+  // Сброс при каждом открытии; при закрытии — разоружить до следующего.
   useEffect(() => {
-    if (visible) {
-      setRemaining(timerSec);
-    }
+    setCountdown(visible ? { remaining: timerSec, armed: true } : (c) => ({ ...c, armed: false }));
   }, [visible, timerSec]);
 
   /**
@@ -459,16 +485,16 @@ export function IncomingOrderModal({
 
   // Обратный отсчёт таймера
   useEffect(() => {
-    if (!visible) return;
-    if (remaining <= 0) {
-      onDismiss();
+    if (!visible || !countdown.armed) return;
+    if (countdown.remaining <= 0) {
+      (onTimeout ?? onDismiss)();
       return;
     }
     const id = setInterval(() => {
-      setRemaining((r) => (r > 0 ? r - 1 : 0));
+      setCountdown((c) => ({ ...c, remaining: c.remaining > 0 ? c.remaining - 1 : 0 }));
     }, 1000);
     return () => clearInterval(id);
-  }, [visible, remaining, onDismiss]);
+  }, [visible, countdown, onDismiss, onTimeout]);
 
   // Pulse-animation
   useEffect(() => {
