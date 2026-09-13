@@ -12,7 +12,7 @@
  * @dependencies: react-query, @/api/routing.api, @/lib/order-route-key,
  *   @/lib/route-choice
  * @created: 2026-09-04 (1.5.36)
- * @updated: 2026-09-13 (1.5.62 — курс машины уходит в запрос маршрута)
+ * @updated: 2026-09-14 (1.5.64 — список вариантов не теряется посреди выбора)
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -21,6 +21,7 @@ import { getOrderRoute, type OrderRoute, type RouteVariant } from '@/api/routing
 import { isSameRouteTarget, orderRouteKey } from '@/lib/order-route-key';
 import {
   isAnchorPassed,
+  nextVariants,
   pickAnchor,
   type RoutePoint,
 } from '@/lib/route-choice';
@@ -32,6 +33,11 @@ interface UseOrderRouteParams {
   lng: number | null | undefined;
   /** Куда машина едет, градусы; уходит в запрос, но не в ключ (1.5.62). */
   heading?: number | null;
+  /**
+   * Ряд выбора открыт — водитель сейчас сравнивает пути (1.5.64). Пока это
+   * так, ответ без выбора не отнимает найденный: см. `nextVariants`.
+   */
+  keepChoice?: boolean;
 }
 
 export interface OrderRouteState {
@@ -67,6 +73,7 @@ export function useOrderRoute({
   lat,
   lng,
   heading,
+  keepChoice = false,
 }: UseOrderRouteParams): OrderRouteState {
   const enabled = Boolean(orderId) && lat != null && lng != null;
 
@@ -120,19 +127,20 @@ export function useOrderRoute({
 
   const query = useQuery({
     queryKey: orderRouteKey({ orderId, status, lat, lng }),
-    queryFn: () =>
-      getOrderRoute({
+    queryFn: async () => {
+      // Опорная точка запоминается ВМЕСТЕ с ответом (1.5.64): к моменту,
+      // когда ответ придёт, точку могли уже снять, а список вариантов должен
+      // знать, с чем построен именно этот ответ — см. `nextVariants`.
+      const via = anchorRef.current;
+      const result = await getOrderRoute({
         orderId: orderId!,
         lat: lat!,
         lng: lng!,
-        via: anchorRef.current
-          ? {
-              lat: anchorRef.current.latitude,
-              lng: anchorRef.current.longitude,
-            }
-          : null,
+        via: via ? { lat: via.latitude, lng: via.longitude } : null,
         heading: headingRef.current,
-      }),
+      });
+      return result ? { ...result, viaUsed: via != null } : null;
+    },
     enabled,
     staleTime: 60_000,
     gcTime: 5 * 60_000,
@@ -166,16 +174,20 @@ export function useOrderRoute({
   }, [anchor, lat, lng, route]);
 
   /**
-   * Запомнить варианты — только со СВОБОДНОГО ответа.
+   * Запомнить варианты — правило в `nextVariants`.
    *
    * С опорной точкой роутер отдаёт один путь, и записать его сюда значило бы
-   * стереть список ровно в тот момент, когда водитель им пользуется.
+   * стереть список ровно в тот момент, когда водитель им пользуется. До 1.5.64
+   * это отсекала проверка «точка задана» — но точку снимают раньше, чем
+   * приходит новый ответ: водитель вернулся на «быстрее», и список затирался
+   * ответом через точку. Ряд пропадал и возвращался свёрнутым (воспроизведено
+   * на эмуляторе 14.09.2026). Теперь смотрим, с чем построен сам ответ.
    */
   useEffect(() => {
-    if (anchor) return;
     const list = route?.routes ?? [];
-    if (list.length > 0) setVariants(list);
-  }, [route, anchor]);
+    const viaUsed = route?.viaUsed ?? false;
+    setVariants((current) => nextVariants(current, list, { viaUsed, keepChoice }));
+  }, [route, keepChoice]);
 
   /**
    * Выбрать вариант.

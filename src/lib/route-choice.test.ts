@@ -18,6 +18,7 @@ import {
   pickAnchor,
   isAnchorPassed,
   hasRealChoice,
+  nextVariants,
   ANCHOR_REACHED_M,
   MIN_DIVERGENCE_M,
 } from '@/lib/route-choice';
@@ -143,5 +144,49 @@ describe('hasRealChoice', () => {
 
   it('пустой список не роняет', () => {
     expect(hasRealChoice([])).toBe(false);
+  });
+});
+
+describe('nextVariants — какой список держать после ответа роутера', () => {
+  const straight = { coordinates: [p(55.75, 37.60), p(55.75, 37.64)] };
+  const detour = { coordinates: [p(55.75, 37.60), p(55.75 + KM, 37.62), p(55.75, 37.64)] };
+  const choice = [straight, detour];
+  const free = { viaUsed: false, keepChoice: false };
+
+  it('ответ через опорную точку список не трогает', () => {
+    // Поломка 1.5.63, воспроизведена на эмуляторе 14.09.2026. Водитель
+    // выбрал «другой путь» и вернулся на «быстрее»: опорная точка уже снята,
+    // а на карте ещё лежит ответ через неё — с ОДНИМ путём. Им и затирался
+    // список: ряд пропадал и возвращался свёрнутым.
+    expect(nextVariants(choice, [detour], { viaUsed: true, keepChoice: false })).toBe(choice);
+    expect(nextVariants(choice, [detour], { viaUsed: true, keepChoice: true })).toBe(choice);
+  });
+
+  it('свободный ответ с выбором заменяет список', () => {
+    const fresh = [detour, straight];
+    expect(nextVariants(choice, fresh, free)).toBe(fresh);
+  });
+
+  it('пустой ответ список не стирает', () => {
+    expect(nextVariants(choice, [], free)).toBe(choice);
+  });
+
+  it('пока ряд открыт, ответ без выбора не отнимает найденный выбор', () => {
+    // С курсом машины роутер отдаёт один путь там, где без курса отдавал два
+    // (стенд, 14.09.2026: курс 0-90° — один путь, 180-270° — два). Водитель в
+    // это время сравнивает пути, и отнять у него кнопки — та же поломка,
+    // пришедшая другой дорогой.
+    expect(nextVariants(choice, [straight], { viaUsed: false, keepChoice: true })).toBe(choice);
+  });
+
+  it('ряд закрыт — ответ без выбора заменяет список: выбора больше нет', () => {
+    const single = [straight];
+    expect(nextVariants(choice, single, free)).toBe(single);
+  });
+
+  it('держать нечего — ответ заменяет список и при открытом ряде', () => {
+    const before = [straight];
+    const after = [detour];
+    expect(nextVariants(before, after, { viaUsed: false, keepChoice: true })).toBe(after);
   });
 });

@@ -25,6 +25,7 @@
  *
  * @dependencies: нет (чистые функции)
  * @created: 2026-09-09 (1.5.49, MOB-024)
+ * @updated: 2026-09-14 (1.5.64 — `nextVariants`: список не теряется посреди выбора)
  */
 
 export interface RoutePoint {
@@ -171,4 +172,31 @@ export function hasRealChoice(variants: { coordinates: RoutePoint[] }[]): boolea
   return variants
     .slice(1)
     .some((v) => pickAnchor(v.coordinates, reference) !== null);
+}
+
+/**
+ * Какой список вариантов держать после нового ответа роутера (1.5.64).
+ *
+ * ПОЧЕМУ НЕ ПРОСТО «ПОСЛЕДНИЙ ОТВЕТ». Список — это то, между чем водитель
+ * выбирает, и терять его посреди выбора нельзя. А терялся он двумя путями:
+ *
+ * • ответ через опорную точку — это ОДИН путь, а не варианты. Раньше его
+ *   отсекала проверка «точка задана», но точку снимают раньше, чем приходит
+ *   новый ответ: водитель вернулся на «быстрее», а на карте ещё ответ через
+ *   точку. Поэтому смотрим, с чем построен сам ответ;
+ * • с курсом машины роутер отдаёт один путь там, где без курса отдавал два.
+ *   Пока ряд открыт, такой ответ найденный выбор не отнимает. Закрыт —
+ *   заменяет: выбора больше нет, и кнопке на карте делать нечего.
+ *
+ * Когда менять нечего, возвращается прежний массив: состояние с той же
+ * ссылкой экран не перерисовывает.
+ */
+export function nextVariants<T extends { coordinates: RoutePoint[] }>(
+  current: T[],
+  incoming: T[],
+  context: { viaUsed: boolean; keepChoice: boolean },
+): T[] {
+  if (context.viaUsed || incoming.length === 0) return current;
+  if (context.keepChoice && hasRealChoice(current) && !hasRealChoice(incoming)) return current;
+  return incoming;
 }

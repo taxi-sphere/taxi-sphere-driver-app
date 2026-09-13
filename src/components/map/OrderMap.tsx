@@ -66,11 +66,11 @@
  *   в журнал приложения вместе с последними фиксами.
  *
  * @dependencies: react-native-maps, react-native-svg, expo-location, expo-router,
- *   @/lib/theme, @/hooks/useOrderRoute, @/lib/map-fit, @/lib/arrow-tracker,
- *   @/lib/route-snap, @/lib/map-orientation, @/lib/map-follow,
+ *   @/lib/theme, @/hooks/useOrderRoute, @/hooks/useRoutePanel, @/lib/map-fit,
+ *   @/lib/arrow-tracker, @/lib/route-snap, @/lib/map-orientation, @/lib/map-follow,
  *   @/stores/settings.store, @/services/logger.service
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-13 (1.5.62 — стрелка с памятью и журнал разворотов)
+ * @updated: 2026-09-14 (1.5.64 — состояние ряда выбора пути на уровне карты)
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -87,6 +87,8 @@ import { DAY_MAP_STYLE } from './day-map-style';
 import { useOrderRoute } from '@/hooks/useOrderRoute';
 import { hasRealChoice } from '@/lib/route-choice';
 import { RouteChoiceBar } from '@/components/map/RouteChoiceBar';
+import { useRoutePanel } from '@/hooks/useRoutePanel';
+import type { RoutePanelTarget } from '@/lib/route-panel';
 import { mapFitKey } from '@/lib/map-fit';
 import {
   createTracker,
@@ -359,6 +361,10 @@ export function OrderMap({
     }, []),
   );
 
+  // Ряд выбора пути: его состояние живёт здесь, а не в самой панели, чтобы
+  // пересоздание панели не сворачивало ряд посреди выбора (1.5.64).
+  const routePanel = useRoutePanel(driverLocation);
+
   const route = useOrderRoute({
     orderId: order.id,
     status: order.status,
@@ -368,7 +374,37 @@ export function OrderMap({
     // движение. Догадка по началу прежней линии роутеру не подсказка.
     heading:
       track?.source === 'route' || track?.source === 'movement' ? track.heading : null,
+    keepChoice: routePanel.open,
   });
+
+  const routeTap = routePanel.tap;
+  const closeRoutePanel = routePanel.close;
+  const { choose: chooseRoute, setHidden: setRouteHidden } = route;
+  const handleRouteTap = useCallback(
+    (target: RoutePanelTarget) => {
+      const action = routeTap(target);
+      if (action === 'hide') setRouteHidden(true);
+      else if (action === 'choose' && target.kind === 'variant') chooseRoute(target.index);
+    },
+    [routeTap, chooseRoute, setRouteHidden],
+  );
+
+  /**
+   * Показывать ли панель выбора. Только когда пути расходятся ощутимо:
+   * `hasRealChoice` отсеивает объезд одного двора, ради которого отвлекать
+   * водителя за рулём не стоит. `route.hidden` держит кнопку и без вариантов —
+   * иначе вернуть скрытую линию было бы нечем.
+   */
+  const showRouteChoice = hasRealChoice(route.variants) || route.chosen || route.hidden;
+
+  /**
+   * Выбирать больше не из чего (новая стадия, развилка позади) — ряд
+   * закрываем. Иначе он остался бы «раскрытым» и сам раскрылся на карте,
+   * когда выбор появится снова, через километры.
+   */
+  useEffect(() => {
+    if (!showRouteChoice) closeRoutePanel();
+  }, [showRouteChoice, closeRoutePanel]);
   // С 1.5.49 хук отдаёт не только линию, но и выбор варианта пути:
   // `route.route` — то, что рисуем, остальное — управление выбором.
   const routeCoords = route.route?.coordinates ?? NO_ROUTE;
@@ -917,20 +953,19 @@ export function OrderMap({
         <Ionicons name="scan-outline" size={20} color={theme.colors.textPrimary} />
       </Pressable>
 
-      {/* Выбор варианта пути (MOB-024). Показывается, только когда пути
-          расходятся ощутимо: `hasRealChoice` отсеивает объезд одного двора,
-          ради которого отвлекать водителя за рулём не стоит. Варианты берём
-          из `route.variants`, а не из последнего ответа: после выбора роутер
-          отдаёт один путь, и список бы схлопнулся ровно тогда, когда им
-          пользуются. `route.hidden` держит кнопку на экране и без вариантов —
-          иначе вернуть скрытую линию было бы нечем. */}
-      {(hasRealChoice(route.variants) || route.chosen || route.hidden) && (
+      {/* Выбор варианта пути (MOB-024). Когда показывать — `showRouteChoice`.
+          Варианты берём из `route.variants`, а не из последнего ответа: после
+          выбора роутер отдаёт один путь, и список бы схлопнулся ровно тогда,
+          когда им пользуются. Раскрыт ли ряд — `routePanel` (1.5.64). */}
+      {showRouteChoice && (
         <RouteChoiceBar
           variants={route.variants}
           chosenIndex={route.chosenIndex}
           hidden={route.hidden}
-          onChoose={route.choose}
-          onHide={() => route.setHidden(true)}
+          open={routePanel.open}
+          lastTapped={routePanel.lastTapped}
+          onOpen={routePanel.openPanel}
+          onTap={handleRouteTap}
           bottomInset={bottomInset}
         />
       )}

@@ -20,11 +20,16 @@
  *
  *   РЯД ЗАКРЫВАЕТСЯ ДВУМЯ СПОСОБАМИ, И ОБА — ПРО ВОДИТЕЛЯ (1.5.58).
  *   Повторным нажатием на ту кнопку, которую он сам только что нажал, и сам
- *   собой через `ROUTE_PANEL_AUTOHIDE_MS`, если водитель выбрал путь и
- *   поехал. Любое нажатие отсчёт сбрасывает, поэтому долгое сравнение путей
- *   ряд не закроет. Решение о нажатии считает `@/lib/route-panel` — там же
- *   объяснено, почему оно опирается на нажатия, а не на подсветку, и там же
- *   тесты.
+ *   собой через `ROUTE_PANEL_AUTOHIDE_MS` — но только когда машина поехала
+ *   (1.5.64): на месте водитель сравнивает пути сколько угодно. Любое
+ *   нажатие отсчёт сбрасывает. Решение о нажатии считает `@/lib/route-panel`
+ *   — там же объяснено, почему оно опирается на нажатия, а не на подсветку,
+ *   и там же тесты.
+ *
+ *   СОСТОЯНИЕ РЯДА — НЕ ЗДЕСЬ (1.5.64). Панель рисуется, только пока есть из
+ *   чего выбирать, и до 1.5.64 её пересоздание сворачивало ряд посреди
+ *   выбора. Раскрыт ли ряд и что нажато, хранит `useRoutePanel` на уровне
+ *   карты; панель только показывает.
  *
  *   СВЁРНУТАЯ КНОПКА ГОВОРИТ СОСТОЯНИЕ. Если линия убрана, она пишет
  *   «Маршрут скрыт», а не «Маршруты»: иначе пустая карта читается как «не
@@ -33,10 +38,9 @@
  * @dependencies: @/lib/theme, @/components/ui, @/api/routing.api,
  *   @/lib/route-panel (что значит нажатие — там же и тесты)
  * @created: 2026-09-09 (1.5.49)
- * @updated: 2026-09-11 (1.5.58 — переключение больше не сворачивает ряд)
+ * @updated: 2026-09-14 (1.5.64 — состояние ряда вынесено в useRoutePanel)
  */
 
-import { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { AppText } from '@/components/ui/Text';
 import { Surface } from '@/components/ui/Surface';
@@ -46,8 +50,6 @@ import type { RouteVariant } from '@/api/routing.api';
 import {
   isRoutePanelTargetActive,
   routePanelAction,
-  routePanelKey,
-  ROUTE_PANEL_AUTOHIDE_MS,
   type RoutePanelTarget,
 } from '@/lib/route-panel';
 
@@ -67,8 +69,12 @@ interface RouteChoiceBarProps {
   chosenIndex: number;
   /** Линия убрана с карты. */
   hidden: boolean;
-  onChoose: (index: number) => void;
-  onHide: () => void;
+  /** Ряд раскрыт — состояние у `useRoutePanel`, не здесь. */
+  open: boolean;
+  /** Что водитель нажал последним с момента раскрытия. */
+  lastTapped: string | null;
+  onOpen: () => void;
+  onTap: (target: RoutePanelTarget) => void;
   /** Высота шторки: панель стоит НАД ней, а не под. */
   bottomInset: number;
 }
@@ -89,61 +95,20 @@ export function RouteChoiceBar({
   variants,
   chosenIndex,
   hidden,
-  onChoose,
-  onHide,
+  open,
+  lastTapped,
+  onOpen,
+  onTap,
   bottomInset,
 }: RouteChoiceBarProps) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const [open, setOpen] = useState(false);
-
-  /**
-   * Что водитель нажал сам с момента раскрытия ряда.
-   *
-   * Сбрасывается при каждом открытии: «повторное нажатие» считается внутри
-   * одного раскрытия, иначе кнопка, нажатая десять минут назад, свернула бы
-   * ряд сразу после следующего открытия.
-   */
-  const [lastTapped, setLastTapped] = useState<string | null>(null);
-
-  const openPanel = useCallback(() => {
-    setLastTapped(null);
-    setOpen(true);
-  }, []);
-
-  const handleTap = useCallback(
-    (target: RoutePanelTarget) => {
-      const action = routePanelAction(target, lastTapped);
-      if (action === 'collapse') {
-        setOpen(false);
-        return;
-      }
-      // Запоминаем ДО действия: `onChoose` перестраивает маршрут, и к тому
-      // моменту, как ответ придёт, нажатие должно быть уже учтено.
-      setLastTapped(routePanelKey(target));
-      if (action === 'hide') onHide();
-      else if (target.kind === 'variant') onChoose(target.index);
-    },
-    [lastTapped, onChoose, onHide],
-  );
-
-  /**
-   * Спрятать ряд, если водитель перестал им пользоваться.
-   *
-   * Зависимость от `lastTapped` — это и есть сброс отсчёта: каждое нажатие
-   * меняет значение, эффект перезапускается, таймер начинается заново.
-   */
-  useEffect(() => {
-    if (!open) return;
-    const timer = setTimeout(() => setOpen(false), ROUTE_PANEL_AUTOHIDE_MS);
-    return () => clearTimeout(timer);
-  }, [open, lastTapped]);
 
   if (!open) {
     return (
       <View style={[styles.wrap, { bottom: bottomInset + spacing.md }]}>
         <Pressable
-          onPress={openPanel}
+          onPress={onOpen}
           accessibilityRole="button"
           accessibilityLabel={hidden ? 'Маршрут скрыт, открыть выбор' : 'Варианты маршрута'}
           style={({ pressed }) => [styles.collapsed, { opacity: pressed ? 0.7 : 1 }]}
@@ -170,7 +135,7 @@ export function RouteChoiceBar({
           return (
             <Pressable
               key={index}
-              onPress={() => handleTap(target)}
+              onPress={() => onTap(target)}
               accessibilityRole="button"
               accessibilityState={{ selected: active }}
               accessibilityLabel={
@@ -212,7 +177,7 @@ export function RouteChoiceBar({
         })}
 
         <Pressable
-          onPress={() => handleTap({ kind: 'noRoute' })}
+          onPress={() => onTap({ kind: 'noRoute' })}
           accessibilityRole="button"
           accessibilityState={{ selected: hidden }}
           accessibilityLabel={

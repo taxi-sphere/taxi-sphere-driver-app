@@ -16,10 +16,12 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  isRoutePanelAutohideArmed,
   isRoutePanelTargetActive,
   routePanelAction,
   routePanelKey,
   ROUTE_PANEL_AUTOHIDE_MS,
+  ROUTE_PANEL_MOVE_M,
   type RoutePanelState,
 } from './route-panel';
 
@@ -108,5 +110,36 @@ describe('ROUTE_PANEL_AUTOHIDE_MS', () => {
     // тестом: случайная правка на 1500 мс сделала бы панель неоткрываемой.
     expect(ROUTE_PANEL_AUTOHIDE_MS).toBe(15_000);
     expect(ROUTE_PANEL_AUTOHIDE_MS).toBeGreaterThanOrEqual(5_000);
+  });
+});
+
+describe('isRoutePanelAutohideArmed — прятать только в движении', () => {
+  const here = { latitude: 56.1105, longitude: 94.5992 };
+  /** Точка в `m` метрах к северу. */
+  const north = (m: number) => ({ latitude: here.latitude + m / 111_195, longitude: here.longitude });
+
+  it('машина стоит — ряд не прячется, сколько бы ни прошло', () => {
+    // Решение владельца 14.09.2026: на месте водитель сравнивает пути сколько
+    // угодно, закрывает ряд он сам — повторным нажатием.
+    expect(isRoutePanelAutohideArmed(here, here)).toBe(false);
+  });
+
+  it('шум приёмника у стоящей машины движением не считается', () => {
+    expect(isRoutePanelAutohideArmed(here, north(30))).toBe(false);
+  });
+
+  it('отъехал от места последнего нажатия — отсчёт пошёл', () => {
+    expect(isRoutePanelAutohideArmed(here, north(ROUTE_PANEL_MOVE_M + 5))).toBe(true);
+  });
+
+  it('позиция неизвестна — не прячем', () => {
+    expect(isRoutePanelAutohideArmed(null, here)).toBe(false);
+    expect(isRoutePanelAutohideArmed(here, null)).toBe(false);
+  });
+});
+
+describe('ROUTE_PANEL_MOVE_M', () => {
+  it('пятьдесят метров — больше шума стоящей машины', () => {
+    expect(ROUTE_PANEL_MOVE_M).toBe(50);
   });
 });
