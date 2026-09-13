@@ -79,7 +79,7 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { radius, useTheme } from '@/lib/theme';
+import { mapButton, radius, useTheme } from '@/lib/theme';
 import { AppText } from '@/components/ui';
 import Svg, { Path } from 'react-native-svg';
 import { NIGHT_MAP_STYLE } from './night-map-style';
@@ -917,7 +917,7 @@ export function OrderMap({
           onPress={handleRecenter}
           accessibilityRole="button"
           accessibilityLabel="Вернуть карту к машине"
-          hitSlop={8}
+          hitSlop={mapButton.hitSlop}
           style={({ pressed }) => [
             styles.fitButton,
             styles.recenterButton,
@@ -940,7 +940,7 @@ export function OrderMap({
         onPress={handleOverview}
         accessibilityRole="button"
         accessibilityLabel="Показать весь маршрут"
-        hitSlop={8}
+        hitSlop={mapButton.hitSlop}
         style={({ pressed }) => [
           styles.fitButton,
           {
@@ -1031,10 +1031,14 @@ function DriverArrow({
 }
 
 /**
- * Маркер: цветной кружок со значком и белой обводкой.
+ * Маркер: цветной кружок со значком и обводкой цвета поверхности.
  *
  * Обводка обязательна — без неё тёмный маркер теряется на ночной карте, а
  * светлый на дневной.
+ *
+ * Значок — `textInverse`, а не белый (1.5.65, MOB-082). Ночью заливки меток
+ * светлые, и белый человечек или флажок на них читался на 1.7-2.8:1:
+ * подача от назначения отличалась только цветом кружка.
  */
 function MapPin({
   color,
@@ -1049,7 +1053,7 @@ function MapPin({
 
   return (
     <View style={[styles.pin, { backgroundColor: color, borderColor: theme.colors.surface }]}>
-      <Ionicons name={icon} size={15} color="#ffffff" />
+      <Ionicons name={icon} size={15} color={theme.colors.textInverse} />
       {ring && <View style={[styles.pinRing, { borderColor: color }]} />}
     </View>
   );
@@ -1059,11 +1063,11 @@ const styles = StyleSheet.create({
   centered: { alignItems: 'center', justifyContent: 'center' },
   fitButton: {
     position: 'absolute',
-    top: 12,
-    right: 12,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    top: mapButton.inset,
+    right: mapButton.inset,
+    width: mapButton.size,
+    height: mapButton.size,
+    borderRadius: mapButton.size / 2,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1089,9 +1093,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   // Под кнопкой общего плана: обе управляют камерой, и держать их рядом
-  // понятнее, чем разносить по углам.
+  // понятнее, чем разносить по углам. Зазор — `mapButton.gap`, не меньше двух
+  // запасов нажатия: при прежних 8 dp зоны нажатия перекрывались, и нажатие
+  // чуть выше «к машине» открывало общий план (1.5.65, MOB-083).
   recenterButton: {
-    top: 60,
+    top: mapButton.inset + mapButton.size + mapButton.gap,
   },
   // «Вы здесь» без направления — точка, как в картах.
   dot: {

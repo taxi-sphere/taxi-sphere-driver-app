@@ -27,7 +27,7 @@
  *   - @/stores/settings.store
  *   - ./design/palette, ./design/tokens
  * @created: 2026-01-24 12:00:00
- * @updated: 2026-09-01 (v1.5.17 — токены, useThemedStyles, тема на всех экранах)
+ * @updated: 2026-09-14 (1.5.65 — реэкспорт mapButton)
  */
 
 import { useMemo } from 'react';
@@ -50,6 +50,7 @@ export {
   icon,
   border,
   motion,
+  mapButton,
   MAX_STAGGER_ITEMS,
 } from './design/tokens';
 

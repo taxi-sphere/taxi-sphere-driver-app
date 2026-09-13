@@ -8,9 +8,15 @@
  *   первого не означает конец смены — статус выводится из того, остались
  *   ли заказы (`useActiveOrders`), а не назначается здесь.
  *
- * @dependencies: orders.api, react-query, useCurrentOrder (useActiveOrders)
+ *   1.5.65: действия не повторяются сами (`ACTION_MUTATION_RETRY`). Повтор
+ *   после таймаута получал 404 на уже записанный этап, и водитель видел бы
+ *   ложную ошибку. У мутаций есть `mutationKey` — журнал ошибок в админке
+ *   называет действие, а не «unknown».
+ *
+ * @dependencies: orders.api, react-query, useCurrentOrder (useActiveOrders),
+ *   @/lib/order-action-error
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-01 (v1.5.17 — поддержка встречного заказа)
+ * @updated: 2026-09-14 (1.5.65 — без автоповтора, ключи мутаций)
  */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -18,6 +24,7 @@ import * as ordersApi from '@/api/orders.api';
 import { useDriverStore } from '@/stores/driver.store';
 import { driverLogger } from '@/services/logger.service';
 import { activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
+import { ACTION_MUTATION_RETRY } from '@/lib/order-action-error';
 import type { CurrentOrder } from '@/types/order';
 
 /** Типизированный wrapper для логирования ошибок мутации */
@@ -40,6 +47,8 @@ export function useOrderActions() {
   };
 
   const accept = useMutation({
+    mutationKey: ['order', 'accept'],
+    retry: ACTION_MUTATION_RETRY,
     mutationFn: ({ orderId, pickupEtaMin }: { orderId: string; pickupEtaMin?: number }) =>
       ordersApi.acceptOrder(orderId, pickupEtaMin),
     onSuccess: (_, vars) => {
@@ -54,6 +63,8 @@ export function useOrderActions() {
   });
 
   const arrive = useMutation({
+    mutationKey: ['order', 'arrive'],
+    retry: ACTION_MUTATION_RETRY,
     mutationFn: (orderId: string) => ordersApi.arriveOrder(orderId),
     onSuccess: (_, orderId) => {
       driverLogger.info('Driver arrived', { action: 'arrive_order', extra: { orderId } });
@@ -63,6 +74,8 @@ export function useOrderActions() {
   });
 
   const start = useMutation({
+    mutationKey: ['order', 'start'],
+    retry: ACTION_MUTATION_RETRY,
     mutationFn: (orderId: string) => ordersApi.startOrder(orderId),
     onSuccess: (_, orderId) => {
       driverLogger.info('Order started', { action: 'start_order', extra: { orderId } });
@@ -72,6 +85,8 @@ export function useOrderActions() {
   });
 
   const complete = useMutation({
+    mutationKey: ['order', 'complete'],
+    retry: ACTION_MUTATION_RETRY,
     mutationFn: ({
       orderId,
       finalPrice,

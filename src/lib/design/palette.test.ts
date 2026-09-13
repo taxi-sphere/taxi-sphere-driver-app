@@ -16,8 +16,13 @@
  *   ПОЧЕМУ ОБВОДКИ НЕ ПРОВЕРЯЕМ. Граница — не текст: её задача едва
  *   наметить край, и 1.5:1 там нормально. Проверяем то, что читают.
  *
+ *   1.5.65: приглушённый текст проверялся только на фоне экрана, и 3.27:1 на
+ *   шторке заказа в тёмной теме прошёл незамеченным; значки на метках карты
+ *   не проверялись вовсе.
+ *
  * @dependencies: vitest, ./palette
  * @created: 2026-09-03 (v1.5.24)
+ * @updated: 2026-09-14 (1.5.65 — приглушённый текст на поверхностях, значки меток)
  */
 
 import { describe, it, expect } from 'vitest';
@@ -102,4 +107,26 @@ describe.each(THEMES)('палитра: %s тема', (_name, colors) => {
     // читать их надо мельком, но читать.
     expect(contrast(colors.textMuted, colors.background)).toBeGreaterThanOrEqual(AA_LARGE);
   });
+
+  it.each(['surface', 'surfaceElevated'] as const)(
+    'приглушённый текст читается на %s',
+    (surface) => {
+      // Шторка заказа — `surfaceElevated`: на ней ночью номер подъезда и
+      // подписи этапов, и 3.27:1 здесь никто не ловил.
+      expect(contrast(colors.textMuted, colors[surface])).toBeGreaterThanOrEqual(AA_TEXT);
+    },
+  );
+
+  it.each(SURFACES)('приглушённый текст различим на %s', (surface) => {
+    expect(contrast(colors.textMuted, colors[surface])).toBeGreaterThanOrEqual(AA_LARGE);
+  });
+
+  it.each(['pointPickup', 'pointStop', 'pointDropoff'] as const)(
+    'значок на метке %s читается',
+    (point) => {
+      // Значок метки — `textInverse`. Белый на светлых ночных метках давал
+      // 1.67-2.77:1. Порог — как для крупных элементов: значок 15 pt.
+      expect(contrast(colors.textInverse, colors[point])).toBeGreaterThanOrEqual(AA_LARGE);
+    },
+  );
 });

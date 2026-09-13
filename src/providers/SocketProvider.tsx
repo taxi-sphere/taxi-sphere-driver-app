@@ -6,9 +6,9 @@
  *   При ошибке токена — автоматически refresh и переподключение.
  *   Инвалидирует React Query при получении событий.
  * @dependencies: socket.service, auth.store, offer.store, token.service,
- *                @tanstack/react-query
+ *                @tanstack/react-query, useCurrentOrder (ключ активных заказов)
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-13 (1.5.60 — подошедший предзаказ звучит как текущий)
+ * @updated: 2026-09-14 (1.5.65 — отмена и смена статуса обновляют активные заказы)
  */
 
 import { useEffect, useRef } from 'react';
@@ -23,7 +23,8 @@ import { showLocalNotification } from '@/services/notification.service';
 import { playSound } from '@/services/sound.service';
 import * as tokenService from '@/services/token.service';
 import { getApiBase, API_TIMEOUT_MS, fetchServerConfig } from '@/lib/constants';
-import type { AvailableOrdersResponse } from '@/types/order';
+import { activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
+import type { AvailableOrdersResponse, CurrentOrder } from '@/types/order';
 
 /** Попытка refresh токена, возвращает новый accessToken или null */
 async function tryRefreshToken(): Promise<string | null> {
@@ -189,8 +190,14 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       })();
     });
 
+    /**
+     * Ключ — активные заказы, а не `['orders','current']` (исправлено в
+     * 1.5.65). С 1.5.17 экран заказа читает список `['orders','active']`, а
+     * здесь остался прежний ключ одного заказа: смена статуса диспетчером и
+     * отмена доходили до экрана только со следующим опросом, до 30 секунд.
+     */
     const unsubStatus = socketService.onOrderStatus(() => {
-      void queryClient.invalidateQueries({ queryKey: ['orders', 'current'] });
+      void queryClient.invalidateQueries({ queryKey: activeOrdersQueryKey });
       void queryClient.invalidateQueries({ queryKey: ['orders', 'available'] });
     });
 
@@ -201,9 +208,17 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
        * два сигнала, которые путают между собой, хуже одного.
        */
       void playSound('order-canceled');
-      // Сброс кэша сразу, чтобы placeholderData не удерживал отменённый заказ
-      queryClient.setQueryData(['orders', 'current'], null);
-      void queryClient.invalidateQueries({ queryKey: ['orders', 'current'] });
+      // Отменённый заказ убираем из активных СРАЗУ: иначе placeholderData и
+      // интервал опроса держат на экране кнопку «Я на месте» по заказу,
+      // которого больше нет. Именно убираем один, а не чистим список: при
+      // встречном заказе второй остаётся в работе.
+      const canceledId = data?.orderId;
+      if (canceledId) {
+        queryClient.setQueryData<CurrentOrder[]>(activeOrdersQueryKey, (prev) =>
+          prev?.filter((order) => order.id !== canceledId),
+        );
+      }
+      void queryClient.invalidateQueries({ queryKey: activeOrdersQueryKey });
       void queryClient.invalidateQueries({ queryKey: ['orders', 'available'] });
       if (AppState.currentState !== 'active') {
         // v1.5.9: показываем ПРИЧИНУ отмены вместо номера заказа.

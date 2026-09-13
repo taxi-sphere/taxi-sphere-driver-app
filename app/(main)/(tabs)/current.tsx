@@ -27,8 +27,9 @@
  *     • v1.5.5 guard `pickupLat/Lng` перед картой — react-native-maps падал
  *       на невалидных координатах и уносил весь экран;
  *     • v1.5.5 логирование всех ошибок действий в админку через
- *       driverLogger — иначе водитель видел silent-fail, а админ не мог
- *       понять, почему заказ «завис»;
+ *       driverLogger — иначе админ не мог понять, почему заказ «завис».
+ *       С 1.5.65 об отказе узнаёт и водитель: `useStageAction` сверяет его
+ *       со свежим списком заказов и говорит, что на самом деле случилось;
  *     • v1.5.12 однократный вывод подъезда (`splitAddressEntrance`); снятие
  *       города переехало на сервер в v1.99.78 — см. `shortAddresses`;
  *     • подтверждение каждого действия через Alert;
@@ -42,10 +43,10 @@
  *   Теперь экран показывается по ФАКТУ успешного завершения, с суммой из
  *   ответа сервера.
  *
- * @dependencies: useActiveOrders, useOrderActions, @/components/ui,
+ * @dependencies: useActiveOrders, useStageAction, @/components/ui,
  *                @/components/order/*, @/components/map/OrderMap
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-13 (1.5.63 — полоса этапов и кнопки одной строкой, без «Готово»)
+ * @updated: 2026-09-14 (1.5.65 — отказ этапного действия объясняется водителю)
  */
 
 import {
@@ -81,8 +82,8 @@ import {
   formatWaitClock,
   liveWaitingSec,
 } from '@/lib/waiting-hint';
-import { finishMeter, setMeterOrder } from '@/services/trip-meter.service';
-import { useOrderActions } from '@/hooks/useOrderActions';
+import { setMeterOrder } from '@/services/trip-meter.service';
+import { useStageAction } from '@/hooks/useStageAction';
 import { useSettingsStore } from '@/stores/settings.store';
 import { driverLogger } from '@/services/logger.service';
 import { haptics } from '@/lib/haptics';
@@ -99,6 +100,7 @@ import { openInNavigator } from '@/lib/open-navigator';
 import { editableRoutePoints, routePointKey } from '@/lib/route-edit';
 import {
   icon as iconTokens,
+  mapButton,
   radius,
   spacing,
   touch,
@@ -164,11 +166,11 @@ const ACTION_BAR_HEIGHT = touch.primary + spacing.lg * 2;
  * Отступ справа для полосы поверх карты.
  *
  * В правом верхнем углу карты стоят её собственные кнопки — «общий план» и
- * «на себя», 40 pt при отступе 12 (`OrderMap`). Плашка с суммой обязана
- * кончаться раньше: иначе строка ожидания при длинном тексте уезжает под
- * кнопку и читается наполовину.
+ * «на себя» (`mapButton` в токенах, рисует `OrderMap`). Плашка с суммой
+ * обязана кончаться раньше: иначе строка ожидания при длинном тексте уезжает
+ * под кнопку и читается наполовину.
  */
-const MAP_BUTTONS_INSET = 12 + 40 + spacing.md;
+const MAP_BUTTONS_INSET = mapButton.inset + mapButton.size + spacing.md;
 
 /**
  * Строка чека: за что слева, сколько справа.
@@ -269,7 +271,9 @@ export default function CurrentOrderScreen() {
     void setMeterOrder(meteredOrderId);
   }, [meteredOrderId]);
 
-  const { arrive, start, complete } = useOrderActions();
+  const stage = useStageAction();
+  const runStage = stage.run;
+  const stageBusy = stage.busy !== null;
   const preferredNavigator = useSettingsStore((s) => s.preferredNavigator);
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -412,31 +416,6 @@ export default function CurrentOrderScreen() {
   );
 
   /**
-   * v1.5.5: обёртка мутации с логированием ошибок в админку. Раньше при
-   * сетевой ошибке /arrive|/start|/complete водитель видел silent-fail
-   * (react-query показывал error state внутренне, но UI не менялся) —
-   * админ не мог понять, почему заказ «завис».
-   */
-  const runOrderAction = useCallback(
-    (action: 'arrive' | 'start' | 'complete', orderId: string, fn: () => void) => {
-      try {
-        fn();
-      } catch (e) {
-        void driverLogger.error(`Action ${action} threw synchronously`, {
-          screen: 'current',
-          action: `order_${action}_throw`,
-          orderId,
-          message: e instanceof Error ? e.message : String(e),
-          stack: e instanceof Error ? e.stack : null,
-        });
-        haptics.reject();
-        void notify('Не удалось выполнить действие', 'Логи отправлены — диспетчер увидит ошибку.');
-      }
-    },
-    [notify],
-  );
-
-  /**
    * Отказ от взятого заказа.
    *
    * Подтверждение обязательно: заказ уйдёт другому водителю, и отменить это
@@ -538,7 +517,9 @@ export default function CurrentOrderScreen() {
 
   /** Одно подтверждение на все три действия — текст берётся по статусу. */
   const handlePrimaryAction = useCallback(() => {
-    if (!order) return;
+    // Пока идёт действие — вместе с досылкой метров и сверкой после отказа —
+    // второе нажатие ничего не начинает (1.5.65).
+    if (!order || stageBusy) return;
 
     // Пока впереди есть непройденная точка, главная кнопка ведёт к ней.
     // Завершение заказа на середине маршрута — самая дорогая ошибка на этом
@@ -554,45 +535,17 @@ export default function CurrentOrderScreen() {
 
     const run = () => {
       haptics.confirm();
-      const onError = (err: unknown, name: string) =>
-        void driverLogger.error(`${name}.mutate failed`, {
-          screen: 'current',
-          action: `order_${name}_error`,
-          orderId: order.id,
-          message: err instanceof Error ? err.message : String(err),
-        });
-
       if (order.status === 'assigned') {
-        runOrderAction('arrive', order.id, () =>
-          arrive.mutate(order.id, { onError: (e) => onError(e, 'arrive') }),
-        );
+        void runStage('arrive', order.id);
       } else if (order.status === 'driver_arrived') {
-        runOrderAction('start', order.id, () =>
-          start.mutate(order.id, { onError: (e) => onError(e, 'start') }),
-        );
+        void runStage('start', order.id);
       } else if (order.status === 'in_progress') {
         const price = order.estimatedPrice;
-        /**
-         * Последние метры досылаются ДО завершения и именно с ожиданием.
-         *
-         * Сервер считает итог по показаниям, которые у него есть на момент
-         * завершения. Пусти оба запроса наперегонки — и на медленной связи
-         * завершение обгонит показания, а последние метры поездки просто не
-         * попадут в чек. `finishMeter` не бросает: не ушло — сервер посчитает
-         * по тому, что успел получить, но шанс мы дали.
-         */
-        void finishMeter(order.id).then(() =>
-          runOrderAction('complete', order.id, () =>
-            complete.mutate(
-              { orderId: order.id },
-              {
-                // Сумму берём из ответа сервера: финальная цена может
-                // отличаться от расчётной (наценки, правки диспетчера).
-                onSuccess: (res) => setCompleted({ price: res.finalPrice ?? price }),
-                onError: (e) => onError(e, 'complete'),
-              },
-            ),
-          ),
+        // Последние метры досылаются перед завершением внутри `useStageAction`.
+        // Сумму берём из ответа сервера: финальная цена может отличаться от
+        // расчётной (наценки, правки диспетчера).
+        void runStage('complete', order.id, (res) =>
+          setCompleted({ price: res.finalPrice ?? price }),
         );
       }
     };
@@ -605,7 +558,7 @@ export default function CurrentOrderScreen() {
     }).then((ok) => {
       if (ok) run();
     });
-  }, [order, arrive, start, complete, runOrderAction, confirm, handleStopReached]);
+  }, [order, stageBusy, runStage, confirm, handleStopReached]);
 
   /**
    * Смена адреса в поездке (1.5.61): клиент назвал другую точку.
@@ -1551,12 +1504,7 @@ export default function CurrentOrderScreen() {
                         ? 'success'
                         : 'primary'
                     }
-                    loading={
-                      arrive.isPending ||
-                      start.isPending ||
-                      complete.isPending ||
-                      markingStop
-                    }
+                    loading={stageBusy || markingStop}
                   >
                     {pendingStop ? stopActionLabel(pendingStop) : action.label}
                   </Button>

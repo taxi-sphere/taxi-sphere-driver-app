@@ -16,18 +16,20 @@
  *   Теперь маршрут рисует общий `RoutePoints`, а кнопка выглядит как все
  *   главные кнопки приложения.
  *
- * @dependencies: useOrderActions, orders.api, @/components/ui
+ * @dependencies: useOrderActions, orders.api, @/components/ui,
+ *   @/lib/order-action-error
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-13 (1.5.59 — окно «взять» уступает окну предложения)
+ * @updated: 2026-09-14 (1.5.65 — отказ принятия заказа объясняется водителю)
  */
 
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getOrderDetails, getOrderEtaEstimate } from '@/api/orders.api';
 import { useOrderActions } from '@/hooks/useOrderActions';
+import { classifyActionError, describeAcceptFailure } from '@/lib/order-action-error';
 import { IncomingOrderModal } from '@/components/IncomingOrderModal';
 import { formatCurrency, formatDistance } from '@/lib/utils';
 import {
@@ -49,6 +51,7 @@ import {
   Surface,
   type RoutePoint,
   OfflineState,
+  useNotify,
 } from '@/components/ui';
 import { useConnectionStore } from '@/stores/connection.store';
 import { useOfferStore } from '@/stores/offer.store';
@@ -66,6 +69,8 @@ export default function OrderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { accept } = useOrderActions();
+  const queryClient = useQueryClient();
+  const notify = useNotify();
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
 
@@ -123,6 +128,13 @@ export default function OrderDetailScreen() {
          * (`app/(main)/(tabs)/orders.tsx`, 1.5.5).
          */
         onSuccess: () => router.replace('/(main)/(tabs)/current'),
+        onError: (error) => {
+          // 1.5.65: раньше окно молча закрывалось. Карточку перечитываем —
+          // заказ мог уйти другому водителю.
+          void queryClient.invalidateQueries({ queryKey: ['order', id, 'details'] });
+          const text = describeAcceptFailure(classifyActionError(error));
+          if (text) void notify(text.title, text.message);
+        },
         onSettled: () => setConfirmOpen(false),
       },
     );

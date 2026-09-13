@@ -19,7 +19,7 @@
  * @dependencies: useAvailableOrders, useScheduledOrders, useOrderActions,
  *                @/components/order/OrderCard, @/components/ui
  * @created: 2026-03-12 18:00:00
- * @updated: 2026-09-13 (1.5.61 — кнопка «Выйти на линию» на пустом списке)
+ * @updated: 2026-09-14 (1.5.65 — отказ принятия заказа объясняется водителю)
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -34,6 +34,7 @@ import { useShiftToggle } from '@/hooks/useShiftToggle';
 import { useConnectionStore } from '@/stores/connection.store';
 import { useOfferStore } from '@/stores/offer.store';
 import { isOrderCurrent } from '@/lib/preorder-timing';
+import { classifyActionError, describeAcceptFailure } from '@/lib/order-action-error';
 import { socketService } from '@/services/socket.service';
 import { getOrderEtaEstimate } from '@/api/orders.api';
 import { IncomingOrderModal } from '@/components/IncomingOrderModal';
@@ -188,6 +189,13 @@ export default function OrdersScreen() {
                   'Переключаться между заказами можно вверху шторки.',
               );
             }
+          },
+          onError: (error) => {
+            // 1.5.65: раньше окно молча закрывалось. Заказ мог уйти другому
+            // водителю — список обновляем сразу, а причину говорим словами.
+            void queryClient.invalidateQueries({ queryKey: ['orders', 'available'] });
+            const text = describeAcceptFailure(classifyActionError(error));
+            if (text) void notify(text.title, text.message);
           },
           onSettled: () => setPendingOrder(null),
         },

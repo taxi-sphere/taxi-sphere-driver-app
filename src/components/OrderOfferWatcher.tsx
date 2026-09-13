@@ -30,8 +30,9 @@
  *
  * @dependencies: socket.service, orders.api, useOrderActions, offer.store,
  *                @/lib/order-offer, IncomingOrderModal, notification.service,
- *                logger.service, react-query, expo-router
+ *                logger.service, react-query, expo-router, @/lib/order-action-error
  * @created: 2026-09-13 (1.5.59)
+ * @updated: 2026-09-14 (1.5.65 — причина отказа принятия общими словами)
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -45,7 +46,7 @@ import { IncomingOrderModal } from '@/components/IncomingOrderModal';
 import { useNotify } from '@/components/ui';
 import { showLocalNotification } from '@/services/notification.service';
 import { driverLogger } from '@/services/logger.service';
-import { humanApiError } from '@/lib/utils';
+import { classifyActionError, describeAcceptFailure } from '@/lib/order-action-error';
 import { offerRemainingSec } from '@/lib/order-offer';
 import { useOfferStore } from '@/stores/offer.store';
 
@@ -200,13 +201,10 @@ export function OrderOfferWatcher() {
           onError: (error) => {
             clear(id);
             refreshAvailable();
-            void notify(
-              'Заказ не принят',
-              humanApiError(
-                error instanceof Error ? error.message : '',
-                'Сервер не ответил. Возможно, заказ уже взял другой водитель.',
-              ),
-            );
+            // Те же слова, что при взятии из списка (1.5.65): обрыв сети
+            // раньше доходил сюда английским «Network request failed».
+            const text = describeAcceptFailure(classifyActionError(error));
+            if (text) void notify(text.title, text.message);
           },
         },
       );
