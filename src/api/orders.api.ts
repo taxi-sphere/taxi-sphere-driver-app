@@ -381,6 +381,11 @@ export async function changeOrderAddress(
   return res.data;
 }
 
+/** Оценить клиента после завершённой поездки (звёзды 1–5); работает, только если директор включил оценку. */
+export async function rateClient(orderId: string, stars: number): Promise<{ success: true }> {
+  return apiPost<{ success: true }>(`driver/orders/${orderId}/rate-client`, { stars });
+}
+
 /** Завершить поездку */
 export async function completeOrder(
   orderId: string,

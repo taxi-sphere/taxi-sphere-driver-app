@@ -230,4 +230,6 @@ export interface CompleteOrderResponse {
   orderId: string;
   orderNumber: string;
   finalPrice: number | null;
+  /** Директор включил оценку клиента водителем: после поездки показать звёзды. */
+  canRateClient?: boolean;
 }

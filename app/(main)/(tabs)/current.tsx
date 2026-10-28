@@ -72,7 +72,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { useActiveOrders, activeOrdersQueryKey } from '@/hooks/useCurrentOrder';
 import { useAvailableOrders } from '@/hooks/useAvailableOrders';
-import { arriveStop, releaseOrder, setWaiting } from '@/api/orders.api';
+import { arriveStop, rateClient, releaseOrder, setWaiting } from '@/api/orders.api';
 import { nextPendingStop, stopActionLabel } from '@/lib/order-stop-progress';
 import { pickupEtaState } from '@/lib/pickup-eta';
 import { rideCostOf } from '@/lib/trip-receipt';
@@ -320,7 +320,7 @@ export default function CurrentOrderScreen() {
    * заказа в ответе сервера уже нет, он исчезает из списка активных в тот
    * же момент.
    */
-  const [completed, setCompleted] = useState<{ price: number | null } | null>(null);
+  const [completed, setCompleted] = useState<{ price: number | null; rateOrderId: string | null } | null>(null);
   /** Идёт отметка промежуточной точки — блокирует главную кнопку. */
   const [markingStop, setMarkingStop] = useState(false);
   /** Идёт переключение ожидания. */
@@ -545,7 +545,7 @@ export default function CurrentOrderScreen() {
         // Сумму берём из ответа сервера: финальная цена может отличаться от
         // расчётной (наценки, правки диспетчера).
         void runStage('complete', order.id, (res) =>
-          setCompleted({ price: res.finalPrice ?? price }),
+          setCompleted({ price: res.finalPrice ?? price, rateOrderId: res.canRateClient ? res.orderId : null }),
         );
       }
     };
@@ -693,6 +693,7 @@ export default function CurrentOrderScreen() {
       <Screen style={styles.centered}>
         <CompletedCard
           price={completed.price}
+          rateOrderId={completed.rateOrderId}
           onDone={handleCompletedDone}
           nextOrderNumber={ordersRef.current?.[0]?.orderNumber ?? null}
         />
@@ -1768,10 +1769,13 @@ function DetailRow({
  */
 function CompletedCard({
   price,
+  rateOrderId,
   onDone,
   nextOrderNumber,
 }: {
   price: number | null;
+  /** Заказ, клиента которого можно оценить; `null` — оценка выключена директором. */
+  rateOrderId: string | null;
   onDone: () => void;
   /** Номер оставшегося в работе заказа — тогда кнопка ведёт к нему. */
   nextOrderNumber: number | null;
@@ -1813,6 +1817,8 @@ function CompletedCard({
         </AppText>
       )}
 
+      {rateOrderId && <RateClientRow orderId={rateOrderId} />}
+
       <Button
         onPress={onDone}
         size="lg"
@@ -1823,6 +1829,57 @@ function CompletedCard({
         {nextOrderNumber != null ? 'К СЛЕДУЮЩЕМУ ЗАКАЗУ' : 'ГОТОВ К ЗАКАЗАМ'}
       </Button>
     </Surface>
+  );
+}
+
+/**
+ * Оценка клиента после поездки: пять звёзд одним нажатием. Показывается, только если директор включил её в настройках
+ * («Клиенты → Оценка клиента водителем»); оценка попадает в рейтинг надёжности клиента у диспетчера. Не оценить — можно,
+ * карточка закрывается кнопкой ниже как раньше. Ошибка отправки не мешает работе: звёзды остаются доступны для повтора.
+ */
+function RateClientRow({ orderId }: { orderId: string }) {
+  const { colors } = useTheme();
+  const [state, setState] = useState<'idle' | 'sending' | 'done' | 'failed'>('idle');
+  const [stars, setStars] = useState(0);
+
+  const send = async (value: number) => {
+    if (state === 'sending' || state === 'done') return;
+    haptics.tap();
+    setStars(value);
+    setState('sending');
+    try {
+      await rateClient(orderId, value);
+      setState('done');
+    } catch {
+      setState('failed');
+    }
+  };
+
+  return (
+    <View style={{ alignItems: 'center', gap: spacing.xs }}>
+      <AppText variant="label" tone="muted" center>
+        {state === 'done' ? 'Спасибо, оценка передана диспетчеру' : state === 'failed' ? 'Не отправилось — нажмите звезду ещё раз' : 'Оцените клиента'}
+      </AppText>
+      <View style={{ flexDirection: 'row', gap: spacing.xs }}>
+        {[1, 2, 3, 4, 5].map((value) => (
+          <Pressable
+            key={value}
+            onPress={() => void send(value)}
+            disabled={state === 'sending' || state === 'done'}
+            accessibilityRole="button"
+            accessibilityLabel={`Оценка клиента: ${value} из 5`}
+            hitSlop={6}
+            style={{ padding: spacing.xs }}
+          >
+            <Ionicons
+              name={value <= stars ? 'star' : 'star-outline'}
+              size={iconTokens.xl}
+              color={value <= stars ? colors.warning : colors.textMuted}
+            />
+          </Pressable>
+        ))}
+      </View>
+    </View>
   );
 }
 
