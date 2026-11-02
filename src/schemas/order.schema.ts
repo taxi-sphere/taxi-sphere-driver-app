@@ -74,9 +74,14 @@ const orderMeterSchema = z.object({
  * опции сюда не попадают, а обезличенные приходят как «Дополнительная
  * опция».
  */
-const orderOptionSchema = z.object({
+export const orderOptionSchema = z.object({
   id: z.string(),
   name: z.string(),
+  /**
+   * Заполненные параметры одной строкой («Ребёнок 1: 3 · Ребёнок 2: 7»), сервер v1.100.173. `.nullish()` — на старом
+   * сервере поля нет, а при скрытом названии опции оно `null`: тогда показываем одно название.
+   */
+  details: z.string().nullish(),
 });
 
 export const availableOrderSchema = z.object({

@@ -81,6 +81,8 @@ export interface OrderMeter {
 export interface OrderOption {
   id: string;
   name: string;
+  /** Параметры опции одной строкой; нет — `null`/не пришло. */
+  details?: string | null;
 }
 
 /** Заказ из списка доступных (GET /driver/orders/available) */

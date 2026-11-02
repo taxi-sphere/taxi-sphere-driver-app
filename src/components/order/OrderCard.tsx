@@ -200,7 +200,7 @@ export const OrderCard = memo(function OrderCard({
                 должен видеть ДО того, как поехал на подачу. */}
             {(order.options ?? []).map((option) => (
               <Badge key={option.id} tone="info">
-                {option.name}
+                {option.details ? `${option.name}: ${option.details}` : option.name}
               </Badge>
             ))}
           </View>
